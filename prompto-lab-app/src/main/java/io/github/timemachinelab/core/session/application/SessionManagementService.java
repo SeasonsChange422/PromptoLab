@@ -357,7 +357,6 @@ public class SessionManagementService {
             log.warn("会话不存在或无效, 用户ID: {} 会话ID: {}", userId, sessionId);
             return false;
         }
-
         session.setUser(userProfile);
         return true;
     }
