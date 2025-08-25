@@ -125,8 +125,16 @@ const customOptionCounter = ref(1)
 const selectOption = (optionId: string) => {
   if (props.disabled) return
   
-  emit('update:selectedValue', optionId)
-  emit('change', optionId)
+  // 查找选中的选项
+  const allOptions = [...props.options, ...customOptions.value]
+  const selectedOption = allOptions.find(option => option.id === optionId)
+  
+  if (selectedOption) {
+    // 格式化为 "id:content" 字符串
+    const formattedValue = `${selectedOption.id}:${selectedOption.label}`
+    emit('update:selectedValue', formattedValue)
+    emit('change', formattedValue)
+  }
 }
 
 const startAddOption = () => {

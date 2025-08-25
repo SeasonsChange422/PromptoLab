@@ -8,7 +8,7 @@
         @click="toggleOption(option.id)"
         class="option-item"
         :class="{ 
-          selected: selectedValues.includes(option.id),
+          selected: selectedValues.some(value => value.startsWith(`${option.id}:`)),
           disabled: disabled
         }"
       >
@@ -28,7 +28,7 @@
         @click="toggleOption(customOption.id)"
         class="option-item custom-option"
         :class="{ 
-          selected: selectedValues.includes(customOption.id),
+          selected: selectedValues.some(value => value.startsWith(`${customOption.id}:`)),
           disabled: disabled
         }"
       >
@@ -127,8 +127,9 @@ const customOptionCounter = ref(1)
 const toggleOption = (optionId: string) => {
   if (props.disabled) return
   
+  const allOptions = [...props.options, ...customOptions.value]
   const currentValues = [...props.selectedValues]
-  const index = currentValues.indexOf(optionId)
+  const index = currentValues.findIndex(value => value.startsWith(`${optionId}:`))
   
   if (index > -1) {
     // 取消选择
@@ -138,7 +139,13 @@ const toggleOption = (optionId: string) => {
     if (props.maxSelections && currentValues.length >= props.maxSelections) {
       return // 达到最大选择数量
     }
-    currentValues.push(optionId)
+    
+    const selectedOption = allOptions.find(option => option.id === optionId)
+    if (selectedOption) {
+      // 格式化为 "id:content" 字符串
+      const formattedValue = `${selectedOption.id}:${selectedOption.label}`
+      currentValues.push(formattedValue)
+    }
   }
   
   emit('update:selectedValues', currentValues)

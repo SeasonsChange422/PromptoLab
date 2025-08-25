@@ -221,7 +221,7 @@ export const createAnswerRequest = {
     nodeId,
     userId,
     questionType: 'single',
-    answer: [selectedOption]
+    answer: selectedOption // 直接传递格式化后的字符串
   }),
   
   /**
@@ -232,7 +232,7 @@ export const createAnswerRequest = {
     nodeId,
     userId,
     questionType: 'multi',
-    answer: selectedOptions
+    answer: selectedOptions // 直接传递格式化后的字符串数组
   }),
   
   /**
