@@ -357,38 +357,81 @@ const removeCustomOption = (optionId: string) => {
 
 /* 添加选项样式 */
 .add-option-container {
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .add-option-btn-container {
   display: flex;
-  justify-content: center;
 }
 
 .add-option-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.1), rgba(244, 208, 63, 0.05));
-  border: 2px dashed rgba(212, 175, 55, 0.3);
-  border-radius: 12px;
-  color: #d4af37;
+  gap: 16px;
+  padding: 20px 24px;
+  width: 100%;
+  background: linear-gradient(135deg, rgba(45, 45, 45, 0.9), rgba(35, 35, 35, 0.9));
+  border: 1px solid rgba(80, 80, 80, 0.3);
+  border-radius: 16px;
+  color: rgba(200, 200, 200, 0.8);
   cursor: pointer;
-  transition: all 0.3s ease;
-  font-size: 14px;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 16px;
   font-weight: 500;
+  backdrop-filter: blur(20px);
+  position: relative;
+  overflow: hidden;
+}
+
+.add-option-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.1), transparent);
+  transition: left 0.6s ease;
 }
 
 .add-option-btn:hover {
-  border-color: rgba(212, 175, 55, 0.5);
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.15), rgba(244, 208, 63, 0.1));
-  transform: translateY(-2px);
+  border-color: rgba(212, 175, 55, 0.4);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.08), rgba(244, 208, 63, 0.04));
+  color: rgba(212, 175, 55, 0.9);
+  transform: translateX(4px);
+  box-shadow: 0 4px 16px rgba(212, 175, 55, 0.1);
+}
+
+.add-option-btn:hover::before {
+  left: 100%;
+}
+
+.add-option-btn:active {
+  transform: translateX(4px) scale(0.98);
 }
 
 .add-icon {
-  font-size: 18px;
+  width: 20px;
+  height: 20px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
   font-weight: bold;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.add-option-btn:hover .add-icon {
+  background: rgba(212, 175, 55, 0.1);
+  transform: rotate(90deg);
+}
+
+.add-text {
+  flex: 1;
+  text-align: left;
 }
 
 .add-input-item {
