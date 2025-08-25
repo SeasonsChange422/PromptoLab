@@ -15,7 +15,7 @@
           {{ message.content }}
           <span v-if="isStreaming" class="cursor-blink">|</span>
         </div>
-        <div class="message-time">{{ formatTime(message.timestamp) }}</div>
+        <div class="message-time">{{ formatTime(new Date(message.timestamp)) }}</div>
       </div>
       <!-- <DynamicSelect :fieldConfig="fieldConfig" :modelValue="val" :isDark="true"/> -->
 
@@ -44,6 +44,11 @@ const handleSelectionChange = (value: any)=>{
 defineProps<Props>()
 
 const formatTime = (timestamp: Date) => {
+  // 检查日期是否有效
+  if (!timestamp || !(timestamp instanceof Date) || isNaN(timestamp.getTime())) {
+    return '未知时间'
+  }
+  
   return timestamp.toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit'

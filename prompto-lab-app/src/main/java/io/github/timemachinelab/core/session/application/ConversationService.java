@@ -5,9 +5,12 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import io.github.timemachinelab.core.constant.AllPrompt;
 import com.suifeng.sfchain.core.AIService;
+import io.github.timemachinelab.core.qatree.QaTree;
+import io.github.timemachinelab.core.qatree.QaTreeNode;
 import io.github.timemachinelab.core.session.domain.entity.ConversationSession;
 import io.github.timemachinelab.core.session.infrastructure.ai.GenPromptOperation;
 import io.github.timemachinelab.core.session.infrastructure.ai.QuestionGenerationOperation;
+import io.github.timemachinelab.core.qatree.QaTreeDomain;
 import io.github.timemachinelab.util.QaTreeSerializeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,8 +28,10 @@ public class ConversationService {
     private final AIService aiService;
     @Resource
     private SessionManagementService sessionManagementService;
+    @Resource
+    private QaTreeDomain qaTreeDomain;
 
-    
+
     public void processUserMessage(String userId, String userMessage, Consumer<QuestionGenerationOperation.QuestionGenerationResponse> sseCallback) {
         ConversationSession session = sessionManagementService.getUserLatestSession(userId);
         if (session == null) {
@@ -37,7 +42,7 @@ public class ConversationService {
         processAIResponse(userMessage, sseCallback);
     }
 
-    public void genPrompt(String sessionId, Consumer<GenPromptOperation.GpResponse> sseCallback){
+    public void genPrompt(String sessionId, String answer, Consumer<GenPromptOperation.GpResponse> sseCallback){
         ConversationSession session = sessionManagementService.getSessionById(sessionId);
         GenPromptOperation.GpRequest req = new GenPromptOperation.GpRequest();
 
@@ -46,7 +51,12 @@ public class ConversationService {
             req.setUser(session.getUser());
             req.setUserTarget(session.getUserTarget());
             req.setAiModel(session.getAiModel());
-            req.setUserConversation(QaTreeSerializeUtil.serialize(session.getQaTree()));
+            // 获取当前会话的qaTree
+            QaTree currentQaTree = session.getQaTree();
+            // 过滤qaTree，只保留有答案的节点
+            QaTree filteredQaTree = qaTreeDomain.filterQaTreeByAnswer(currentQaTree, session.getCurrentNode());
+            req.setUserConversation(QaTreeSerializeUtil.serialize(filteredQaTree));
+            req.setUserConversation(answer);
 
             GenPromptOperation.GpResponse aiResponse = aiService.execute("PromptGenMaster", req);
             sseCallback.accept(aiResponse);

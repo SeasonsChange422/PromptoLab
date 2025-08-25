@@ -1,15 +1,21 @@
 package io.github.timemachinelab.controller;
 
-import com.alibaba.fastjson2.JSON;
-import io.github.timemachinelab.core.constant.AllPrompt;
+import com.alibaba.fastjson.JSONObject;
+import io.github.timemachinelab.core.fingerprint.FingerprintService;
+import io.github.timemachinelab.core.fingerprint.UserFingerprint;
+import io.github.timemachinelab.core.session.application.ConversationService;
 import io.github.timemachinelab.core.session.application.MessageProcessingService;
 import io.github.timemachinelab.core.session.application.SessionManagementService;
 import io.github.timemachinelab.core.session.application.SseNotificationService;
+import io.github.timemachinelab.core.session.application.SseValidationService;
+import io.github.timemachinelab.core.session.application.SessionException;
+import io.github.timemachinelab.core.session.application.SessionProcessingService;
+import io.github.timemachinelab.core.session.application.RetryProcessingService;
+import io.github.timemachinelab.core.qatree.QaTreeDomain;
+import io.github.timemachinelab.core.qatree.QaTree;
+
 import io.github.timemachinelab.core.session.domain.entity.ConversationSession;
-import io.github.timemachinelab.core.session.infrastructure.ai.GenPromptOperation;
-import io.github.timemachinelab.core.session.infrastructure.web.dto.GenPromptRequest;
-import io.github.timemachinelab.core.session.infrastructure.web.dto.SetUserProfileRequest;
-import io.github.timemachinelab.core.session.infrastructure.web.dto.UnifiedAnswerRequest;
+import io.github.timemachinelab.core.session.infrastructure.web.dto.*;
 import io.github.timemachinelab.entity.req.RetryRequest;
 import io.github.timemachinelab.entity.resp.ApiResult;
 import io.github.timemachinelab.entity.resp.RetryResponse;
@@ -21,17 +27,21 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * 用户交互控制器
  * 提供用户交互相关的API接口
- * 
- * @author suifeng
+ *
+ * @author welsir
  * @date 2025/1/20
  */
 @Slf4j
@@ -45,263 +55,346 @@ public class UserInteractionController {
     private SessionManagementService sessionManagementService;
     @Resource
     private SseNotificationService sseNotificationService;
-
+    @Resource
+    private FingerprintService fingerprintService;
+    @Resource
+    private ConversationService conversationService;
+    @Resource
+    private SseValidationService sseValidationService;
+    @Resource
+    private SessionProcessingService sessionProcessingService;
+    @Resource
+    private RetryProcessingService retryProcessingService;
+    @Resource
+    private QaTreeDomain qaTreeDomain;
     /**
      * 建立SSE连接
+     * 1. 生成指纹(如果不存在)，返回空的sessionList
+     * 2. 如果生成的指纹已经存在，获取对应的sessionList返回
+     *
+     * @param request HTTP请求对象
+     * @return SSE连接
      */
     @GetMapping(value = "/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamConversation(@RequestParam(required = false) String sessionId, 
-                                        @RequestParam String userId) {
-        log.info("建立SSE连接 - 会话ID: {}, 用户ID: {}", sessionId, userId);
+    public SseEmitter streamConversation(HttpServletRequest request) {
+        log.info("建立SSE连接 - 来源IP: {}", request.getRemoteAddr());
 
-        boolean isNewSession = false;
-        ConversationSession session;
-        
         try {
-            if (sessionId == null || sessionId.isEmpty()) {
-                // 新建会话
-                session = sessionManagementService.createNewSession(userId);
-                sessionId = session.getSessionId();
-                isNewSession = true;
-                log.info("创建新会话 - 用户ID: {}, 会话ID: {}", userId, sessionId);
-            } else {
-                // 使用现有会话
-                session = sessionManagementService.validateAndGetSession(userId, sessionId);
-                if (session == null) {
-                    log.warn("会话不存在或无效 - 用户ID: {}, 会话ID: {}", userId, sessionId);
-                    // 创建新会话作为fallback
-                    session = sessionManagementService.createNewSession(userId != null ? userId : "anonymous_" + UUID.randomUUID().toString().substring(0, 8));
-                    sessionId = session.getSessionId();
-                    isNewSession = true;
-                }
-            }
-            
-            SseEmitter emitter = new SseEmitter(Long.MAX_VALUE);
-            sseNotificationService.registerSseConnection(sessionId, emitter);
-            
-            // 连接建立时发送会话信息
-            Map<String, Object> connectionData = new ConcurrentHashMap<>();
-            connectionData.put("sessionId", sessionId);
-            connectionData.put("userId", session.getUserId());
-            connectionData.put("isNewSession", isNewSession);
-            connectionData.put("timestamp", System.currentTimeMillis());
-            
-            // 根据会话状态返回nodeId
-            if (isNewSession) {
-                // 新会话返回根节点ID
-                connectionData.put("nodeId", "1");
-                log.info("新会话返回根节点ID: 1 - 会话: {}", sessionId);
-            } else if (session.getQaTree() != null && session.getQaTree().getRoot() != null) {
-                // 已存在会话，返回根节点ID（因为qaTree只有根节点）
-                String rootNodeId = session.getQaTree().getRoot().getId();
-                connectionData.put("nodeId", rootNodeId);
-                log.info("已存在会话返回根节点ID: {} - 会话: {}", rootNodeId, sessionId);
-                
-                // 返回qaTree
-                try {
-                    String qaTreeJson = io.github.timemachinelab.util.QaTreeSerializeUtil.serialize(session.getQaTree());
-                    connectionData.put("qaTree", qaTreeJson);
-                } catch (Exception e) {
-                    log.error("序列化qaTree失败: {}", e.getMessage());
-                }
-            } else {
-                // 兜底情况，返回根节点ID
-                connectionData.put("nodeId", "1");
-                log.info("兜底返回根节点ID: 1 - 会话: {}", sessionId);
-            }
-            
-            sseNotificationService.sendWelcomeMessage(sessionId, connectionData);
-                 
-             // 设置连接事件处理
-             String finalSessionId = sessionId;
-             emitter.onCompletion(() -> {
-                 log.info("SSE连接完成: {}", finalSessionId);
-             });
+            // 1. 自动生成或获取用户指纹
+            UserFingerprint userFingerprint = fingerprintService.getOrCreateUserFingerprint(request);
+            String fingerprint = userFingerprint.getFingerprint();
 
-             emitter.onTimeout(() -> {
-                 log.info("SSE连接超时: {}", finalSessionId);
-                 sseNotificationService.removeSseConnection(finalSessionId);
-             });
-             
-             emitter.onError((ex) -> {
-                 log.error("SSE连接错误: {} - {}", finalSessionId, ex.getMessage());
-                 sseNotificationService.removeSseConnection(finalSessionId);
-             });
-             
-             return emitter;
-                 
-         } catch (Exception e) {
-             log.error("建立SSE连接失败: {}", e.getMessage());
-             SseEmitter errorEmitter = new SseEmitter(Long.MAX_VALUE);
-             try {
-                 errorEmitter.send(SseEmitter.event()
-                     .name("error")
-                     .data("连接建立失败: " + e.getMessage()));
-             } catch (IOException ioException) {
-                 log.error("发送错误消息失败: {}", ioException.getMessage());
-             }
-             return errorEmitter;
-         }
+            log.info("用户指纹: {}, 是否新用户: {}, 访问次数: {}",
+                    fingerprint,
+                    userFingerprint.getVisitCount() == 1,
+                    userFingerprint.getVisitCount());
+
+            // 2. 使用指纹作为用户ID
+
+            // 3. 获取用户的会话ID列表
+            List<String> sessionIds = sessionManagementService.getUserSessionIds(fingerprint);
+            log.info("用户指纹: {} 对应的会话ID列表: {}", fingerprint, sessionIds);
+            
+            // 获取用户的会话详细信息列表
+            List<SessionDetailResponse> sessionDetails = sessionIds.stream()
+                .map(sessionManagementService::getSessionDetail)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+            log.info("用户指纹: {} 对应的会话详细信息列表: {}", fingerprint, sessionDetails);
+
+            // 4. 创建SSE连接（使用指纹作为连接标识）
+            // 设置一个较长的超时时间，例如1小时（3600 * 1000 毫秒）
+            SseEmitter emitter = new SseEmitter(3600 * 1000L);
+            sseNotificationService.registerSseConnection(fingerprint, emitter);
+
+            // 5. 连接建立时发送用户信息和sessionList
+            Map<String, Object> connectionData = new ConcurrentHashMap<>();
+            connectionData.put("fingerprintId", fingerprint);
+            connectionData.put("sessionList", sessionDetails); // 发送会话详细信息列表而不是简单的ID列表
+            connectionData.put("isNewUser", userFingerprint.getVisitCount() == 1);
+            connectionData.put("displayName", userFingerprint.getDisplayName());
+            connectionData.put("visitCount", userFingerprint.getVisitCount());
+            connectionData.put("timestamp", System.currentTimeMillis());
+
+            // 如果用户已有会话，返回第一个会话ID作为默认会话
+            if (!sessionIds.isEmpty()) {
+                String defaultSessionId = sessionIds.get(0);
+                connectionData.put("sessionId", defaultSessionId);
+                // 获取会话详细信息
+                ConversationSession defaultSession = sessionManagementService.getSessionById(defaultSessionId);
+                if (defaultSession != null) {
+                    connectionData.put("currentNodeId", defaultSession.getCurrentNode());
+                }
+            }
+
+            // 将Map转换为JSONObject以生成标准JSON格式
+            JSONObject jsonData = new JSONObject(connectionData);
+            sseNotificationService.sendSuccessMessage(fingerprint, jsonData.toJSONString());
+
+            // 设置连接事件处理
+            emitter.onCompletion(() -> {
+                log.info("SSE连接完成，指纹: {}", fingerprint);
+                sseNotificationService.removeSseConnection(fingerprint); // 确保连接完成时也移除
+            });
+
+            emitter.onTimeout(() -> {
+                log.warn("SSE连接超时，指纹: {}", fingerprint);
+                sseNotificationService.removeSseConnection(fingerprint);
+            });
+
+            emitter.onError((ex) -> {
+                log.error("SSE连接错误，指纹: {} - {}", fingerprint, ex.getMessage(), ex); // 打印完整的堆栈信息
+                sseNotificationService.removeSseConnection(fingerprint);
+            });
+
+            return emitter;
+
+        } catch (Exception e) {
+            log.error("建立SSE连接失败: {}", e.getMessage());
+            SseEmitter errorEmitter = new SseEmitter(Long.MAX_VALUE);
+            try {
+                errorEmitter.send(SseEmitter.event()
+                        .name("error")
+                        .data("连接建立失败: " + e.getMessage()));
+            } catch (IOException ioException) {
+                log.error("发送错误消息失败: {}", ioException.getMessage());
+            }
+            return errorEmitter;
+        }
     }
 
     /**
      * 重试接口
-     * 
-     * @param request 重试请求参数
+     *
+     * @param request     重试请求参数
+     * @param httpRequest HTTP请求对象
      * @return 重试结果
      */
     @PostMapping("/retry")
-    public ResponseEntity<ApiResult<RetryResponse>> retry(@Valid @RequestBody RetryRequest request) {
-        try {
-            log.info("收到重试请求 - nodeId: {}, sessionId: {}, whyretry: {}", 
-                    request.getNodeId(), request.getSessionId(), request.getWhyretry());
+    public ResponseEntity<ApiResult<RetryResponse>> retry(@Valid @RequestBody RetryRequest request, HttpServletRequest httpRequest)
+            throws SessionException {
+        log.info("收到重试请求 - nodeId: {}, sessionId: {}, whyretry: {}",
+                request.getNodeId(), request.getSessionId(), request.getWhyretry());
 
-            // 使用应用服务验证节点存在性
-            //todo: 有可能水平越权 不传userId的话
-            if (!sessionManagementService.validateNodeExists(request.getSessionId(), request.getNodeId())) {
-                log.warn("节点不存在 - nodeId: {}, sessionId: {}", request.getNodeId(), request.getSessionId());
-                return ResponseEntity.badRequest().body(ApiResult.error("指定的节点不存在"));
-            }
-            
-            // 使用应用服务获取问题内容
-            String question = sessionManagementService.getNodeQuestion(request.getSessionId(), request.getNodeId());
-            if (question == null) {
-                log.warn("节点问题内容为空 - nodeId: {}, sessionId: {}", request.getNodeId(), request.getSessionId());
-                return ResponseEntity.badRequest().body(ApiResult.error("节点问题内容为空"));
-            }
+        // 1. 验证SSE连接并获取用户指纹
+        String fingerprint = sseValidationService.validateAndGetFingerprint(httpRequest);
 
-            // 获取会话对象
-            ConversationSession session = sessionManagementService.getSessionById(request.getSessionId());
-            if (session == null) {
-                log.warn("会话不存在 - sessionId: {}", request.getSessionId());
-                return ResponseEntity.badRequest().body(ApiResult.error("会话不存在"));
-            }
-            
-            // 移除要重试的节点（AI会基于parentId重新创建节点）
-            boolean nodeRemoved = sessionManagementService.removeNode(request.getSessionId(), request.getNodeId());
-            if (!nodeRemoved) {
-                log.warn("移除节点失败，但继续处理重试 - sessionId: {}, nodeId: {}", 
-                        request.getSessionId(), request.getNodeId());
-            }
-            
-            // 使用MessageProcessingService处理重试消息
-            String processedMessage = messageProcessingService.processRetryMessage(
-                    request.getSessionId(),
-                    request.getNodeId(),
-                    request.getWhyretry(),
-                    session
-            );
-            
-            // 发送处理后的消息给AI服务
-            messageProcessingService.processAndSendMessage(session, processedMessage);
-            
-            // 构建响应数据
-            RetryResponse response = RetryResponse.builder()
-                    .nodeId(request.getNodeId())
-                    .sessionId(request.getSessionId())
-                    .whyretry(request.getWhyretry())
-                    .processTime(System.currentTimeMillis())
-                    .build();
-            
-            log.info("重试请求处理成功 - nodeId: {}, sessionId: {}", 
-                    request.getNodeId(), request.getSessionId());
-            
-            return ResponseEntity.ok(ApiResult.success("重试请求处理成功", response));
-            
-        } catch (Exception e) {
-            log.error("重试请求处理失败: {}", e.getMessage(), e);
-            return ResponseEntity.badRequest().body(ApiResult.serverError("重试请求处理失败: " + e.getMessage()));
-        }
+        // 2. 处理重试请求（验证和处理逻辑）
+        RetryProcessingService.RetryProcessingResult retryResult =
+            retryProcessingService.processRetryRequest(fingerprint, request);
+
+        // 3. 发送处理后的消息给AI服务
+        messageProcessingService.processAndSendMessage(
+            retryResult.getSession(),
+            retryResult.getProcessedMessage()
+        );
+
+        // 4. 构建响应数据
+        RetryResponse response = retryProcessingService.buildRetryResponse(request);
+
+        log.info("重试请求处理成功 - nodeId: {}, sessionId: {}",
+                request.getNodeId(), request.getSessionId());
+
+        return ResponseEntity.ok(ApiResult.success("重试请求处理成功", response));
     }
 
     /**
-     * 处理统一答案请求
+     * 处理统一答案请求（基于用户指纹）
      * 支持单选、多选、输入框、表单等多种问题类型的回答
+     * 逻辑: 如果没有带sessionId，默认就是新建对话，不需要传入NodeId
+     * 如果带了sessionId就不是新建会话
+     *
+     * @param request     统一答案请求
+     * @param httpRequest HTTP请求对象
+     * @return 处理结果
      */
     @PostMapping("/message")
-    public ResponseEntity<String> processAnswer(@Validated @RequestBody UnifiedAnswerRequest request) {
-        try {
-            log.info("接收到答案请求 - 会话ID: {}, 节点ID: {}, 问题类型: {}",
-                    request.getSessionId(),
-                    request.getNodeId(),
-                    request.getQuestionType());
+    public ResponseEntity<String> processAnswer(@Validated @RequestBody UnifiedAnswerRequest request,
+                                                HttpServletRequest httpRequest) throws SessionException {
+        log.info("接收到答案请求 - 会话ID: {}, 问题类型: {}",
+                request.getSessionId(),
+                request.getQuestionType());
 
-            // 2. 会话管理和验证
-            String userId = request.getUserId();
-            if (userId == null || userId.trim().isEmpty()) {
-                log.warn("缺少必需的userId参数");
-                return ResponseEntity.badRequest().body("userId参数是必需的");
-            }
+        // 1. 验证SSE连接并获取用户指纹
+        String fingerprint = sseValidationService.validateAndGetFingerprint(httpRequest);
 
-            // 3. 验证会话是否存在
-            ConversationSession session = sessionManagementService.validateAndGetSession(userId, request.getSessionId());
-            if (session == null) {
-                log.warn("会话不存在或无效 - 用户ID: {}, 会话ID: {}", userId, request.getSessionId());
-                return ResponseEntity.badRequest().body("会话不存在或无效");
-            }
+        // 2. 处理会话请求（新建或继续会话）
+        SessionProcessingService.SessionProcessingResult sessionResult =
+            sessionProcessingService.processSessionRequest(fingerprint, request);
 
-            // 4. nodeId验证逻辑
-            String nodeId = request.getNodeId();
-            if (nodeId == null || nodeId.trim().isEmpty()) {
-                // nodeId为空，表示这是新建会话的第一个问题
-                if (session.getQaTree() != null && session.getQaTree().getRoot() != null) {
-                    log.warn("会话已存在qaTree，但nodeId为空 - 会话: {}", session.getSessionId());
-                    return ResponseEntity.badRequest().body("现有会话必须提供nodeId");
-                }
-                log.info("新建会话的第一个问题 - 会话: {}", session.getSessionId());
-            } else if ("1".equals(nodeId)) {
-                // nodeId为'1'，表示这是根节点的回答
-                if (session.getQaTree() == null || session.getQaTree().getRoot() == null) {
-                    log.info("根节点回答，但qaTree未初始化 - 会话: {}", session.getSessionId());
-                    // 允许继续处理，后续会创建qaTree
-                } else {
-                    log.info("根节点回答 - 会话: {}", session.getSessionId());
-                }
-            } else {
-                // nodeId不为空且不是'root'，验证是否属于该会话
-                if (!sessionManagementService.validateNodeId(session.getSessionId(), nodeId)) {
-                    log.warn("无效的节点ID - 会话: {}, 节点: {}", session.getSessionId(), nodeId);
-                    return ResponseEntity.badRequest().body("无效的节点ID");
-                }
-                log.info("更新现有节点 - 会话: {}, 节点: {}", session.getSessionId(), nodeId);
-            }
+        ConversationSession session = sessionResult.getSession();
 
-            // 3. 验证答案格式
-            if (!messageProcessingService.validateAnswer(request)) {
-                log.warn("答案格式验证失败: {}", request);
-                return ResponseEntity.badRequest().body("答案格式不正确");
-            }
-
-            // 答案更新逻辑已在MessageProcessingService中处理
-            messageProcessingService.processAnswer(request);
-            // 4. 处理答案并转换为消息
-            String processedMessage = messageProcessingService.preprocessMessage(
-                    null, // 没有额外的原始消息
-                    request,
-                    session
-            );
-
-            // 5. 发送处理后的消息给AI服务
-            messageProcessingService.processAndSendMessage(session, processedMessage);
-
-
-            return ResponseEntity.ok("答案处理成功");
-
-        } catch (Exception e) {
-            log.error("处理答案失败 - 会话ID: {}, 错误: {}", request.getSessionId(), e.getMessage(), e);
-            return ResponseEntity.internalServerError().body("答案处理失败: " + e.getMessage());
+        // 3. 验证答案格式
+        if (!messageProcessingService.validateAnswer(request)) {
+            log.warn("答案格式验证失败: {}", request);
+            return ResponseEntity.badRequest().body("答案格式不正确");
         }
+
+        // 6. 处理答案并转换为消息
+        String processedMessage = messageProcessingService.preprocessMessage(
+                null,
+                request,
+                session
+        );
+
+        // 7. 发送处理后的消息给AI服务
+        messageProcessingService.processAndSendMessage(session, processedMessage);
+
+        return ResponseEntity.ok("答案处理成功");
     }
 
     @PostMapping("/gen-prompt")
-    public ResponseEntity<String>  genPrompt(@RequestBody GenPromptRequest request) {
-        GenPromptOperation.GpResponse gpResponse = new GenPromptOperation.GpResponse();
-        gpResponse.setGenPrompt(AllPrompt.GEN_PROMPT_AGENT_PROMPT);
-        sseNotificationService.sendWelcomeMessage(request.getSessionId(), JSON.toJSONString(gpResponse));
-        return ResponseEntity.ok("生成提示词");
+    public ResponseEntity<String> genPrompt(@RequestBody GenPromptRequest request, HttpServletRequest httpRequest) throws SessionException {
+        // 1. 验证SSE连接并获取用户指纹
+        String fingerprint = sseValidationService.validateAndGetFingerprint(httpRequest);
+        log.info("处理genPrompt请求 - 指纹: {}, sessionId: {}, answer: {}", fingerprint, request.getSessionId(), request.getAnswer());
+
+        // 2. 检查sessionId和answer的逻辑
+        String sessionId = request.getSessionId();
+        Object answer = request.getAnswer();
+
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            // 如果没有sessionId，必须检查answer是否为空
+            if (answer == null || (answer instanceof String && ((String) answer).trim().isEmpty())) {
+                log.error("新建会话时answer不能为空 - 指纹: {}", fingerprint);
+                sseNotificationService.sendErrorMessage(fingerprint, "新建会话时必须提供answer"); // 保持原样，因为错误消息的发送方式未改变
+                return ResponseEntity.badRequest().body("新建会话时answer不能为空");
+            }
+        }
+
+        ConversationSession session;
+        QaTree filteredQaTree = null;
+
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            // 新建会话
+            session = sessionManagementService.createNewSession(fingerprint);
+            if (session == null) {
+                log.error("会话创建失败 - 指纹: {}", fingerprint);
+                sseNotificationService.sendErrorMessage(fingerprint, "会话创建失败，请重试"); // 保持原样，因为错误消息的发送方式未改变
+                return ResponseEntity.internalServerError().body("会话处理失败");
+            }
+        } else {
+            // 3. 如果存在sessionId，获取conversation的currentNodeId，表示当前node节点需要过滤
+            session = sessionManagementService.validateAndGetSession(fingerprint, sessionId);
+            if (session == null) {
+                log.error("会话获取失败 - 指纹: {}, sessionId: {}", fingerprint, sessionId);
+                sseNotificationService.sendErrorMessage(fingerprint, "会话不存在或已失效"); // 保持原样，因为错误消息的发送方式未改变
+                return ResponseEntity.badRequest().body("会话不存在或已失效");
+            }
+
+            // 获取当前节点ID并过滤qaTree
+            String currentNodeId = session.getCurrentNode();
+            QaTree originalQaTree = session.getQaTree();
+            // 4. 在qaTreeDomain里过滤qaNode(如果answer不存在则过滤)，返回整个qaTree
+            filteredQaTree = qaTreeDomain.filterQaTreeByAnswer(originalQaTree, currentNodeId);
+            log.info("已过滤qaTree - 会话: {}, 过滤节点: {}", sessionId, currentNodeId);
+        }
+
+        // 5. 走现在有的逻辑(从创建会话开始) - 调用AI服务生成提示词
+        // 如果有过滤后的qaTree，临时替换session中的qaTree
+        QaTree originalQaTree = null;
+        if (filteredQaTree != null) {
+            originalQaTree = session.getQaTree();
+            session.setQaTree(filteredQaTree);
+        }
+
+        final QaTree finalOriginalQaTree = originalQaTree;
+        // 将Object类型的answer转换为String类型
+        String answerStr = "";
+        if (request.getAnswer() != null) {
+            if (request.getAnswer() instanceof String) {
+                answerStr = (String) request.getAnswer();
+            } else {
+                // 对于其他类型，转换为JSON字符串
+                answerStr = JSONObject.toJSONString(request.getAnswer());
+            }
+        }
+
+        conversationService.genPrompt(session.getSessionId(), answerStr, response -> {
+            try {
+                // 恢复原始qaTree
+                if (finalOriginalQaTree != null) {
+                    session.setQaTree(finalOriginalQaTree);
+                }
+
+                // 更新currentNode - 在AI回答后创建新节点
+                String newNodeId = session.getNextNodeId();
+                session.setCurrentNode(newNodeId);
+                session.setUpdateTime(LocalDateTime.now());
+
+                // 发送AI生成的提示词
+                sseNotificationService.sendSuccessMessage(fingerprint, response.getGenPrompt()); // 保持原样，因为成功消息的发送方式未改变
+
+                log.info("genPrompt处理完成 - 会话: {}, 新节点: {}", session.getSessionId(), newNodeId);
+            } catch (Exception e) {
+                // 恢复原始qaTree（异常情况下）
+                if (finalOriginalQaTree != null) {
+                    session.setQaTree(finalOriginalQaTree);
+                }
+                log.error("SSE消息发送失败: {}", e.getMessage(), e);
+                // 确保SSE有响应，即使是错误消息
+                sseNotificationService.sendErrorMessage(fingerprint, "提示词生成完成，但响应发送失败"); // 保持原样，因为错误消息的发送方式未改变
+            }
+        });
+
+        return ResponseEntity.ok("提示词生成请求已处理");
     }
 
-    
+    /**
+     * 获取对话历史接口
+     * 根据传入的指纹(请求头)和sessionId，找到对应的conversation，然后组装对应的qaTree返回给前端
+     *
+     * @param sessionId 会话ID
+     * @param httpRequest HTTP请求对象
+     * @return 对话历史数据
+     */
+    @GetMapping("/history")
+    public ResponseEntity<ApiResult<ConversationHistoryResponse>> getConversationHistory(
+            @RequestParam String sessionId,
+            HttpServletRequest httpRequest) {
+        log.info("收到获取对话历史请求 - sessionId: {}", sessionId);
+
+        try {
+            // 1. 验证SSE连接并获取用户指纹
+            String fingerprint = sseValidationService.validateAndGetFingerprint(httpRequest);
+            log.info("验证用户指纹成功 - 指纹: {}", fingerprint);
+
+            // 2. 验证会话是否存在且属于该用户
+            ConversationSession session = sessionManagementService.validateAndGetSession(fingerprint, sessionId);
+            if (session == null) {
+                log.warn("会话验证失败 - 指纹: {}, sessionId: {}", fingerprint, sessionId);
+                return ResponseEntity.badRequest()
+                    .body(ApiResult.error("会话不存在或不属于该用户"));
+            }
+
+            // 3. 获取会话的QaTree
+            QaTree qaTree = session.getQaTree();
+            if (qaTree == null) {
+                log.warn("会话QaTree为空 - sessionId: {}", sessionId);
+                return ResponseEntity.badRequest()
+                    .body(ApiResult.error("会话数据不完整"));
+            }
+
+            // 4. 组装返回数据
+            ConversationHistoryResponse response = new ConversationHistoryResponse(
+                session.getSessionId(),
+                session.getUserId(),
+                session.getCurrentNode(),
+                session.getCreateTime(),
+                session.getUpdateTime(),
+                qaTree
+            );
+
+            log.info("成功获取对话历史 - sessionId: {}, 节点数量: {}", sessionId, qaTree.getNodeCount());
+            return ResponseEntity.ok(ApiResult.success("获取对话历史成功", response));
+
+        } catch (Exception e) {
+            log.error("获取对话历史失败 - sessionId: {}", sessionId, e);
+            return ResponseEntity.internalServerError()
+                .body(ApiResult.error("获取对话历史失败: " + e.getMessage()));
+        }
+    }
+
     /**
      * 获取SSE连接状态
      */

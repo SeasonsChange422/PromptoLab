@@ -11,16 +11,7 @@ import io.github.timemachinelab.core.session.infrastructure.web.dto.UnifiedAnswe
  * 日期: 2025/1/27
  */
 public interface MessageProcessingService {
-    
-    /**
-     * 处理统一答案请求
-     * 将用户的回答转换为适合大模型处理的格式
-     * 
-     * @param request 统一答案请求
-     * @return 处理后的消息内容
-     */
-    String processAnswer(UnifiedAnswerRequest request);
-    
+
     /**
      * 预处理消息
      * 在发送给大模型之前对消息进行加工

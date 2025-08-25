@@ -27,13 +27,7 @@ public class UnifiedAnswerRequest {
     /**
      * 会话ID
      */
-    @NotBlank(message = "会话ID不能为空")
     private String sessionId;
-    
-    /**
-     * 节点ID
-     */
-    private String nodeId;
     
     /**
      * 问题类型：single, multi, input, form
@@ -51,15 +45,13 @@ public class UnifiedAnswerRequest {
     private Object answer;
     
     /**
-     * 额外的上下文信息
+     * 额外的上下文信息 用户画像
      */
     private Map<String, Object> context;
 
-    /**
-     * 用户ID
-     */
-    @NotBlank(message = "用户ID不能为空")
-    private String userId;
+    private String userPortrait;
+    private String aiModel;
+
     /**
      * 表单答案项
      */

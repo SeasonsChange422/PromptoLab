@@ -31,6 +31,22 @@ public class QaTree {
     }
     
     /**
+     * 获取节点映射表（用于调试和验证）
+     * @return 节点映射表
+     */
+    public Map<String, QaTreeNode> getNodeMap() {
+        return new HashMap<>(nodeMap); // 返回副本保证封装性
+    }
+    
+    /**
+     * 获取节点数量
+     * @return 节点数量
+     */
+    public int getNodeCount() {
+        return nodeMap.size();
+    }
+    
+    /**
      * 移除指定节点及其所有子节点
      * @param nodeId 要移除的节点ID
      * @return 是否移除成功

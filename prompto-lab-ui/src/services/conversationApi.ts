@@ -1,9 +1,9 @@
-import { apiRequest } from './apiUtils'
 import { API_CONFIG } from './apiConfig'
+ import { apiRequest } from './apiUtils'
 
 // 类型定义
 export interface MessageRequest {
-  sessionId: string
+  sessionId?: string // sessionId可选，不带时默认新会话
   content: string
   type: 'USER_TEXT' | 'USER_SELECTION'
   questionId?: string
@@ -26,14 +26,21 @@ export interface ConversationSession {
   createdAt: string
 }
 
+export interface SessionItem {
+  id: string
+  title: string
+  lastMessage: string
+  updatedAt: string
+  createdAt: string
+}
+
+
 // 统一答案请求接口
 export interface UnifiedAnswerRequest {
-  sessionId: string
-  nodeId?: string
+  sessionId?: string // sessionId可选，不带时默认新会话
   questionType: 'single' | 'multi' | 'input' | 'form'
   answer: any // 根据questionType不同，类型不同
   context?: Record<string, any>
-  userId: string
 }
 
 // 表单答案项
@@ -45,6 +52,7 @@ export interface FormAnswerItem {
 // API基础URL
 const API_BASE = `${API_CONFIG.BASE_URL}/api/demo`
 const USER_INTERACTION_BASE = `${API_CONFIG.BASE_URL}/api/user-interaction`
+const CONVERSATION_BASE = `${API_CONFIG.BASE_URL}/api/conversation`
 
 /**
  * 创建新的会话（真实版本 - 对接后端会话管理）
@@ -101,6 +109,18 @@ export const getSession = async (sessionId: string): Promise<ConversationSession
 }
 
 /**
+ * 获取会话列表
+ */
+export const fetchSessionList = async (): Promise<SessionItem[]> => {
+  const url = `${CONVERSATION_BASE}/sessions`
+  const response = await apiRequest(url, {
+    method: 'GET',
+    requireAuth: false
+  })
+  return response.data
+}
+
+/**
  * 建立SSE连接（Demo版本 - 使用SSE Demo接口）
  */
 export const connectSSE = (sessionId: string, onMessage: (response: MessageResponse) => void, onError?: (error: Event) => void): EventSource => {
@@ -109,7 +129,6 @@ export const connectSSE = (sessionId: string, onMessage: (response: MessageRespo
 
   // 监听连接建立事件
   eventSource.addEventListener('connected', (event: MessageEvent) => {
-    console.log('SSE连接已建立:', event.data)
   })
 
   // 监听普通消息
@@ -172,14 +191,12 @@ export const connectSSE = (sessionId: string, onMessage: (response: MessageRespo
  * 发送用户消息到用户交互接口
  * 对接后端的用户交互消息接口
  */
-export const sendUserMessage = async (request: MessageRequest, userId: string, nodeId?: string): Promise<void> => {
+export const sendUserMessage = async (request: MessageRequest): Promise<void> => {
   // 构建统一答案请求格式
   const unifiedRequest: UnifiedAnswerRequest = {
-    sessionId: request.sessionId,
-    nodeId: nodeId, // 包含nodeId字段
+    sessionId: request.sessionId || '', // sessionId可选，空字符串表示新会话
     questionType: 'input', // 普通文本消息作为input类型
-    answer: request.content,
-    userId: userId
+    answer: request.content
   }
   
   const url = `${USER_INTERACTION_BASE}/message`
@@ -211,22 +228,17 @@ export const processAnswer = async (request: UnifiedAnswerRequest): Promise<void
 
 /**
  * 建立用户交互SSE连接
- * 对接后端的用户交互SSE接口
+ * 对接后端的用户交互SSE接口（基于用户指纹）
  */
-export const connectUserInteractionSSE = (sessionId: string | null, userId: string, onMessage: (response: any) => void, onError?: (error: Event) => void): EventSource => {
-  // 构建查询参数
-  const params = new URLSearchParams()
-  if (sessionId) {
-    params.append('sessionId', sessionId)
-  }
-  params.append('userId', userId)
-  
-  const url = `${USER_INTERACTION_BASE}/sse?${params.toString()}`
+export const connectUserInteractionSSE = (onMessage: (response: any) => void, onError?: (error: Event) => void): EventSource => {
+  // 后端SSE接口不需要参数，会自动通过HttpServletRequest生成或获取用户指纹
+  const url = `${USER_INTERACTION_BASE}/sse`
   const eventSource = new EventSource(url)
+
+
 
   // 监听连接建立事件
   eventSource.addEventListener('connected', (event: MessageEvent) => {
-    console.log('用户交互SSE连接已建立:', event.data)
     try {
       // 解析连接数据并传递给onMessage回调
       const connectionData = JSON.parse(event.data)
@@ -245,6 +257,26 @@ export const connectUserInteractionSSE = (sessionId: string | null, userId: stri
       onMessage(response)
     } catch (error) {
       console.error('解析用户交互SSE消息失败:', error)
+    }
+  })
+
+  // 监听成功消息事件
+  eventSource.addEventListener('success', (event: MessageEvent) => {
+    try {
+      const response = JSON.parse(event.data)
+      onMessage(response)
+    } catch (error) {
+      console.error('解析成功消息失败:', error)
+    }
+  })
+
+  // 监听错误消息事件
+  eventSource.addEventListener('error', (event: MessageEvent) => {
+    try {
+      const response = JSON.parse(event.data)
+      onMessage(response)
+    } catch (error) {
+      console.error('解析错误消息失败:', error)
     }
   })
 
