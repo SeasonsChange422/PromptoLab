@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
 import javax.validation.constraints.NotBlank;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -128,7 +130,12 @@ public class UnifiedAnswerRequest {
         
         switch (questionType.toLowerCase()) {
             case "single":
+                // 单选直接返回字符串（已经是id:content格式）
+                String singleChoice = getInputAnswer();
+                return singleChoice != null ? singleChoice : "";
+                
             case "multi":
+                // 多选返回逗号分隔的字符串（每个都是id:content格式）
                 List<String> choices = getChoiceAnswer();
                 return choices != null && !choices.isEmpty() ? String.join(", ", choices) : "";
                 
@@ -167,6 +174,12 @@ public class UnifiedAnswerRequest {
         
         switch (questionType.toLowerCase()) {
             case "single":
+                String singleChoice = getInputAnswer();
+                if (singleChoice != null) {
+                    sb.append("选择了：").append(singleChoice);
+                }
+                break;
+                
             case "multi":
                 List<String> choices = getChoiceAnswer();
                 if (choices != null && !choices.isEmpty()) {
@@ -194,5 +207,80 @@ public class UnifiedAnswerRequest {
         }
         
         return sb.toString();
+    }
+
+    /**
+     * 解析选项字符串，提取ID和内容
+     * @param optionString 格式为"id:content"的字符串
+     * @return 包含id和content的Map
+     */
+    public static Map<String, String> parseOptionString(String optionString) {
+        Map<String, String> result = new HashMap<>();
+        if (optionString != null && optionString.contains(":")) {
+            String[] parts = optionString.split(":", 2);
+            result.put("id", parts[0]);
+            result.put("content", parts[1]);
+        }
+        return result;
+    }
+
+    /**
+     * 获取选择题的所有选项ID
+     * @return 选项ID列表
+     */
+    public List<String> getChoiceIds() {
+        List<String> ids = new ArrayList<>();
+        
+        if ("single".equals(questionType)) {
+            String singleChoice = getInputAnswer();
+            if (singleChoice != null) {
+                Map<String, String> parsed = parseOptionString(singleChoice);
+                if (!parsed.isEmpty()) {
+                    ids.add(parsed.get("id"));
+                }
+            }
+        } else if ("multi".equals(questionType)) {
+            List<String> choices = getChoiceAnswer();
+            if (choices != null) {
+                for (String choice : choices) {
+                    Map<String, String> parsed = parseOptionString(choice);
+                    if (!parsed.isEmpty()) {
+                        ids.add(parsed.get("id"));
+                    }
+                }
+            }
+        }
+        
+        return ids;
+    }
+
+    /**
+     * 获取选择题的所有选项内容
+     * @return 选项内容列表
+     */
+    public List<String> getChoiceContents() {
+        List<String> contents = new ArrayList<>();
+        
+        if ("single".equals(questionType)) {
+            String singleChoice = getInputAnswer();
+            if (singleChoice != null) {
+                Map<String, String> parsed = parseOptionString(singleChoice);
+                if (!parsed.isEmpty()) {
+                    contents.add(parsed.get("content"));
+                }
+            }
+        } else if ("multi".equals(questionType)) {
+            List<String> choices = getChoiceAnswer();
+            if (choices != null) {
+                for (String choice : choices) {
+                    Map<String, String> parsed = parseOptionString(choice);
+                    if (!parsed.isEmpty()) {
+                        contents.add(parsed.get("content"));
+                    }
+                }
+            }
+        }
+        
+        return contents;
     }
 }
