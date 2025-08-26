@@ -13,6 +13,8 @@ import io.github.timemachinelab.core.session.application.SessionProcessingServic
 import io.github.timemachinelab.core.session.application.RetryProcessingService;
 import io.github.timemachinelab.core.qatree.QaTreeDomain;
 import io.github.timemachinelab.core.qatree.QaTree;
+import io.github.timemachinelab.core.qatree.QaTreeNode;
+import io.github.timemachinelab.core.question.InputQuestion;
 
 import io.github.timemachinelab.core.session.domain.entity.ConversationSession;
 import io.github.timemachinelab.core.session.infrastructure.web.dto.*;
@@ -21,6 +23,7 @@ import io.github.timemachinelab.entity.req.RetryRequest;
 import io.github.timemachinelab.entity.resp.ApiResult;
 import io.github.timemachinelab.entity.resp.RetryResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang.StringUtils;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -32,6 +35,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -253,6 +257,17 @@ public class UserInteractionController {
         // 2. 检查sessionId和answer的逻辑
         String sessionId = request.getSessionId();
         Object answer = request.getAnswer();
+        
+        // 将Object类型的answer转换为String类型
+         String answerStr = "";
+         if (answer != null) {
+             if (answer instanceof String) {
+                 answerStr = (String) answer;
+             } else {
+                 // 对于其他类型，转换为JSON字符串
+                 answerStr = JSONObject.toJSONString(answer);
+             }
+         }
 
         if (sessionId == null || sessionId.trim().isEmpty()) {
             // 如果没有sessionId，必须检查answer是否为空
@@ -269,11 +284,6 @@ public class UserInteractionController {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             // 新建会话
             session = sessionManagementService.createNewSession(fingerprint);
-            if (session == null) {
-                log.error("会话创建失败 - 指纹: {}", fingerprint);
-                sseNotificationService.sendErrorMessage(fingerprint, "会话创建失败，请重试"); // 保持原样，因为错误消息的发送方式未改变
-                return ResponseEntity.internalServerError().body("会话处理失败");
-            }
         } else {
             // 3. 如果存在sessionId，获取conversation的currentNodeId，表示当前node节点需要过滤
             session = sessionManagementService.validateAndGetSession(fingerprint, sessionId);
@@ -283,15 +293,37 @@ public class UserInteractionController {
                 return ResponseEntity.badRequest().body("会话不存在或已失效");
             }
 
-            // 获取当前节点ID并过滤qaTree
+            // 获取当前节点ID
             String currentNodeId = session.getCurrentNode();
             QaTree originalQaTree = session.getQaTree();
+            
+            // answerStr已在方法开始处定义，这里直接使用
+            
+            // 检查是否是在回答当前问题
+             if (!StringUtils.isBlank(answerStr)) {
+                 // 用户提供了答案，说明是在回答当前问题
+                 // 先将答案插入到qaTree中
+                 try {
+                     boolean updateSuccess = qaTreeDomain.updateNodeAnswer(originalQaTree, currentNodeId, answerStr);
+                     if (updateSuccess) {
+                         log.info("已将用户答案插入qaTree - 会话: {}, 节点: {}, 答案: {}", sessionId, currentNodeId, answerStr);
+                     } else {
+                         log.warn("更新节点答案失败，节点可能不存在 - 会话: {}, 节点: {}", sessionId, currentNodeId);
+                         sseNotificationService.sendErrorMessage(fingerprint, "当前问题节点不存在，请刷新页面重试");
+                         return ResponseEntity.badRequest().body("当前问题节点不存在");
+                     }
+                 } catch (Exception e) {
+                     log.error("插入用户答案失败 - 会话: {}, 节点: {}", sessionId, currentNodeId, e);
+                     sseNotificationService.sendErrorMessage(fingerprint, "处理用户答案失败，请重试");
+                     return ResponseEntity.internalServerError().body("处理用户答案失败");
+                 }
+             }
+            
             // 4. 在qaTreeDomain里过滤qaNode(如果answer不存在则过滤)，返回整个qaTree
             filteredQaTree = qaTreeDomain.filterQaTreeByAnswer(originalQaTree, currentNodeId);
             log.info("已过滤qaTree - 会话: {}, 过滤节点: {}", sessionId, currentNodeId);
         }
 
-        // 5. 走现在有的逻辑(从创建会话开始) - 调用AI服务生成提示词
         // 如果有过滤后的qaTree，临时替换session中的qaTree
         QaTree originalQaTree = null;
         if (filteredQaTree != null) {
@@ -300,16 +332,7 @@ public class UserInteractionController {
         }
 
         final QaTree finalOriginalQaTree = originalQaTree;
-        // 将Object类型的answer转换为String类型
-        String answerStr = "";
-        if (request.getAnswer() != null) {
-            if (request.getAnswer() instanceof String) {
-                answerStr = (String) request.getAnswer();
-            } else {
-                // 对于其他类型，转换为JSON字符串
-                answerStr = JSONObject.toJSONString(request.getAnswer());
-            }
-        }
+        // answerStr已在上面定义，这里不需要重复定义
 
         conversationService.genPrompt(session.getSessionId(), answerStr, response -> {
             try {
@@ -318,15 +341,34 @@ public class UserInteractionController {
                     session.setQaTree(finalOriginalQaTree);
                 }
 
-                // 更新currentNode - 在AI回答后创建新节点
-                String newNodeId = session.getNextNodeId();
-                session.setCurrentNode(newNodeId);
+                String parentId = session.getCurrentNode();
+
+                // 创建一个文本类型的问题，内容是生成的提示词
+                InputQuestion promptQuestion = new InputQuestion();
+                promptQuestion.setQuestion(response.getGenPrompt());
+                promptQuestion.setAnswer(""); // 初始无答案，等待用户回答
+                
+                // 添加到qaTree
+                QaTreeNode promptNode = qaTreeDomain.appendNode(session.getQaTree(), parentId, promptQuestion, session);
+                
+                // 更新currentNode为新创建的提示词节点
+                session.setCurrentNode(promptNode.getId());
                 session.setUpdateTime(LocalDateTime.now());
 
-                // 发送AI生成的提示词
-                sseNotificationService.sendSuccessMessage(fingerprint, response.getGenPrompt()); // 保持原样，因为成功消息的发送方式未改变
+                // 发送question格式的SSE消息，就像普通的AI回答一样
+                Map<String, Object> questionResponse = new HashMap<>();
+                questionResponse.put("question", Map.of(
+                    "type", "input",
+                    "question", response.getGenPrompt(),
+                    "desc", "这是为您生成的提示词，您可以基于此内容继续对话"
+                ));
+                questionResponse.put("sessionId", session.getSessionId());
+                questionResponse.put("currentNodeId", promptNode.getId());
+                questionResponse.put("parentNodeId", session.getCurrentNode());
+                
+                sseNotificationService.sendSuccessMessage(fingerprint, JSONObject.toJSONString(questionResponse));
 
-                log.info("genPrompt处理完成 - 会话: {}, 新节点: {}", session.getSessionId(), newNodeId);
+                log.info("genPrompt处理完成 - 会话: {}, 新节点: {}", session.getSessionId(), promptNode.getId());
             } catch (Exception e) {
                 // 恢复原始qaTree（异常情况下）
                 if (finalOriginalQaTree != null) {

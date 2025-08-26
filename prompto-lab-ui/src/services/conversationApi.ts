@@ -293,14 +293,12 @@ export const connectUserInteractionSSE = (onMessage: (response: any) => void, on
     }
   }
 
-  // 监听原生连接关闭事件（当EventSource状态变为CLOSED时）
+  // 只在手动关闭时调用onClose，避免重复调用
   const originalClose = eventSource.close.bind(eventSource)
   eventSource.close = () => {
-    console.log('SSE连接关闭')
-    if (onClose) {
-      onClose()
-    }
+    console.log('手动关闭SSE连接')
     originalClose()
+    // 不在这里调用onClose，避免与'close'事件重复
   }
 
   return eventSource

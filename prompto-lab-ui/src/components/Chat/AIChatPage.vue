@@ -27,6 +27,7 @@
     <div class="main-content" :style="{ width: mainContentWidth + 'px' }">
       <QuestionRenderer ref="questionRendererRef" :current-question="currentQuestion" :is-loading="isLoading"
         :session-id="sessionId" :user-id="userId" :conversation-tree="conversationTree" :current-node-id="currentNodeId"
+        :is-viewing-history="isViewingHistory"
         @send-message="handleSendMessage" @submit-answer="handleSubmitAnswer" @retry-question="handleRetryQuestion" 
         @generate-prompt="handleGeneratePrompt" @node-selected="handleNodeSelected" />
     </div>
@@ -196,6 +197,9 @@ const setLoading = (loading: boolean) => {
 
 // 问题状态管理
 const currentQuestion = ref<any>(null)
+
+// 显示模式控制 - 新增状态变量
+const isViewingHistory = ref<boolean>(false)
 
 // 会话信息
 const sessionId = ref<string | null>(null)
@@ -394,10 +398,10 @@ const handleSSEMessage = (response: any) => {
     return
   }
 
-  // 处理生成提示词消息
-  if (handleGenPromptMessage(actualData)) {
-    return
-  }
+  // 移除genPrompt专门处理，现在生成提示词也通过question格式处理
+  // if (handleGenPromptMessage(actualData)) {
+  //   return
+  // }
 
   // 处理新问题格式消息
 
@@ -512,9 +516,20 @@ const handleConnectionMessage = (response: any): boolean => {
         }
       }
 
+      // 检查是否需要加载存储的会话历史
+      if (currentSessionId.value && currentSessionId.value !== response.sessionId && isViewingHistory.value) {
+        console.log('检测到需要切换到存储的会话:', currentSessionId.value)
+        // 延迟执行切换，确保SSE连接完全建立
+        setTimeout(() => {
+          switchToSession(currentSessionId.value)
+        }, 500)
+      }
+
+      // 统一的连接成功提示
+      const sessionMessage = response.isNewSession ? '新会话已创建，开始对话吧！' : '已连接到会话，可以继续对话'
       toast.success({
-        title: '会话已建立',
-        message: response.isNewSession ? '已创建新会话' : '已连接到现有会话',
+        title: '连接成功',
+        message: sessionMessage,
         duration: 2000
       })
     } else {
@@ -523,10 +538,11 @@ const handleConnectionMessage = (response: any): boolean => {
       isConnected.value = true
       console.warn('SSE连接建立消息中缺少sessionId:', response)
 
+      // 简化提示，避免与上面的提示重复
       toast.success({
-        title: '连接已建立',
-        message: '已连接到服务，可以开始对话',
-        duration: 2000
+        title: '服务已连接',
+        message: '准备就绪，可以开始对话',
+        duration: 1500
       })
     }
     return true
@@ -584,11 +600,9 @@ const handleQuestionMessage = (response: any): boolean => {
         userId: fingerprint.value || 'unknown'
       }
 
-      toast.success({
-        title: '会话已建立',
-        message: '已从AI响应中获取会话信息',
-        duration: 2000
-      })
+      // 移除重复提示，避免与连接建立提示冲突
+      // 这个提示在AI响应时不需要显示，因为用户已经知道连接状态
+      console.log('从AI响应中获取会话信息:', response.sessionId)
     }
 
     // 更新当前节点ID为新创建的问题节点ID
@@ -874,6 +888,12 @@ const handleSSEError = (error: Event) => {
 const handleSSEClose = () => {
   console.log('SSE连接已关闭，清理客户端状态')
   
+  // 防止重复处理关闭事件
+  if (!isConnected.value && !eventSource.value) {
+    console.log('连接已经关闭，跳过重复处理')
+    return
+  }
+  
   // 更新连接状态
   isConnected.value = false
   
@@ -903,7 +923,7 @@ const handleSSEClose = () => {
   // localStorage.removeItem(FINGERPRINT_KEY)
   // fingerprint.value = null
   
-  console.log('SSE连接关闭，保持指纹不变')
+  console.log('SSE连接关闭处理完成，保持指纹不变')
 }
 
 // 添加AI消息到对话树
@@ -1037,17 +1057,54 @@ const startNewChat = () => {
   conversationTree.value.clear()
   currentNodeId.value = ''
   currentQuestion.value = null
+  // 重置为快速输入模式
+  isViewingHistory.value = false
   // 重新初始化会话
   initializeSession()
-  toast.success('已开始新对话')
+  // 简化提示，用户操作反馈更直观
+  toast.success({
+    title: '新对话',
+    message: '已清空历史，开始新的对话',
+    duration: 1500
+  })
 }
 
 const switchToSession = async (sessionId: string) => {
-  if (currentSessionId.value === sessionId) return
+  console.log('switchToSession被调用，sessionId:', sessionId, '当前sessionId:', currentSessionId.value)
+  
+  // 如果是相同的sessionId且已经在历史查看模式，检查是否有历史数据
+  if (currentSessionId.value === sessionId && isViewingHistory.value) {
+    // 如果已经有历史数据，则不需要重复处理
+    if (conversationTree.value && conversationTree.value.size > 0) {
+      console.log('已经在查看该会话的历史记录且有数据，跳过处理')
+      return
+    }
+    // 如果没有历史数据，继续执行加载逻辑
+    console.log('在历史查看模式但没有数据，继续加载历史记录')
+  }
+  
+  // 如果是相同的sessionId但不在历史查看模式，直接切换到历史查看模式
+  if (currentSessionId.value === sessionId && !isViewingHistory.value) {
+    console.log('切换到当前会话的历史查看模式')
+    isViewingHistory.value = true
+    currentQuestion.value = null
+    // 检查是否有历史数据，如果有就不需要重新加载
+    if (conversationTree.value && conversationTree.value.size > 0) {
+      // 移除不必要的提示，用户点击会话记录时界面变化已经足够明显
+  // toast.success('已切换到历史查看模式')
+      return
+    }
+    // 如果没有历史数据，继续执行加载逻辑
+    console.log('切换到历史查看模式，但需要加载历史数据')
+  }
 
   try {
     // 显示加载状态
     setLoading(true)
+    
+    // 立即设置为历史查看模式，不管是否有历史数据
+    isViewingHistory.value = true
+    console.log('已设置isViewingHistory为true')
     
     // 确保SSE连接已建立
     if (!isConnected.value || !eventSource.value || eventSource.value.readyState !== EventSource.OPEN) {
@@ -1089,6 +1146,8 @@ const switchToSession = async (sessionId: string) => {
       // 清空当前对话树和问题状态
       conversationTree.value.clear()
       currentQuestion.value = null // 清空当前问题，显示对话历史而不是快速输入
+      // 设置为历史查看模式
+      isViewingHistory.value = true
       
       // 如果有qaTree数据，重建对话树
       if (historyData.qaTree) {
@@ -1099,34 +1158,68 @@ const switchToSession = async (sessionId: string) => {
             qaTreeNodes = JSON.parse(qaTreeNodes)
           }
           
-          // 重建对话树 - qaTreeNodes是JsonNode数组格式
+          // 重建对话树 - 使用后端增强的数据格式
           if (Array.isArray(qaTreeNodes)) {
-            qaTreeNodes.forEach((jsonNode: any) => {
+            // 按nodeId排序，确保对话顺序正确
+            qaTreeNodes.sort((a, b) => parseInt(a.nodeId) - parseInt(b.nodeId))
+            
+            qaTreeNodes.forEach((jsonNode: any, index: number) => {
               if (jsonNode && jsonNode.nodeId) {
-                const conversationNode: ConversationNode = {
+                // 1. 直接使用后端提供的questionData（SSE兼容格式）
+                const questionData = jsonNode.questionData
+                
+                // 如果是当前节点，设置为当前问题
+                if (!currentQuestion.value && jsonNode.nodeId === historyData.currentNode && questionData) {
+                  currentQuestion.value = questionData
+                  console.log('从历史记录恢复当前问题:', questionData)
+                }
+                
+                // 如果这是最后一个未回答的问题，也设置为当前问题
+                if (!currentQuestion.value && questionData && (!jsonNode.answer || !jsonNode.answer.trim())) {
+                  // 检查是否是最后一个节点
+                  const isLastNode = index === qaTreeNodes.length - 1 || 
+                    !qaTreeNodes.slice(index + 1).some(node => node.parentId === jsonNode.nodeId)
+                  if (isLastNode) {
+                    currentQuestion.value = questionData
+                    currentNodeId.value = jsonNode.nodeId
+                    console.log('设置最后未回答问题为当前问题:', questionData)
+                  }
+                }
+                
+                // 2. 创建AI问题节点（左侧）
+                let questionContent = ''
+                if (questionData) {
+                  // 保持questionData的JSON格式，以便QuestionRenderer能正确识别
+                  questionContent = JSON.stringify(questionData)
+                } else {
+                  // 兜底：如果没有questionData，使用原始question字段
+                  questionContent = jsonNode.question || ''
+                }
+                
+                const questionNode: ConversationNode = {
                   id: jsonNode.nodeId,
-                  content: jsonNode.question || '',
-                  type: jsonNode.parentId ? 'user' : 'assistant', // 根节点为assistant，其他为user
-                  timestamp: new Date(),
+                  content: questionContent,
+                  type: 'assistant', // AI消息显示在左侧
+                  timestamp: new Date(Date.now() + index * 1000),
                   parentId: jsonNode.parentId,
                   children: [],
                   isActive: false
                 }
-                conversationTree.value.set(jsonNode.nodeId, conversationNode)
+                conversationTree.value.set(jsonNode.nodeId, questionNode)
                 
-                // 如果有答案，添加对应的回答节点
+                // 3. 添加用户回答节点（右侧）
                 if (jsonNode.answer && jsonNode.answer.trim()) {
                   const answerNode: ConversationNode = {
                     id: jsonNode.nodeId + '_answer',
                     content: jsonNode.answer,
-                    type: 'assistant',
-                    timestamp: new Date(),
+                    type: 'user', // 用户消息显示在右侧
+                    timestamp: new Date(Date.now() + index * 1000 + 500),
                     parentId: jsonNode.nodeId,
                     children: [],
                     isActive: false
                   }
                   conversationTree.value.set(answerNode.id, answerNode)
-                  conversationNode.children.push(answerNode.id)
+                  questionNode.children.push(answerNode.id)
                 }
               }
             })
@@ -1176,11 +1269,18 @@ const switchToSession = async (sessionId: string) => {
     }
   } catch (error) {
     console.error('切换会话失败:', error)
+    // 即使加载失败，也保持历史查看模式，显示空的历史界面
     toast.error({
       title: '切换失败',
-      message: '无法加载会话历史，请重试',
+      message: '无法加载会话历史，但已切换到该会话',
       duration: 3000
     })
+    // 确保基本的会话切换状态设置
+    currentSessionId.value = sessionId
+    saveCurrentSessionId(sessionId)
+    conversationTree.value.clear()
+    currentQuestion.value = null
+    console.log('即使出错也保持isViewingHistory为true')
   } finally {
     setLoading(false)
   }
@@ -1190,7 +1290,11 @@ const deleteSession = (sessionId: string) => {
   const index = sessionList.value.findIndex(s => s.id === sessionId)
   if (index > -1) {
     sessionList.value.splice(index, 1)
-    toast.success('会话已删除')
+    toast.success({
+      title: '删除成功',
+      message: '会话记录已删除',
+      duration: 1500
+    })
 
     // 如果删除的是当前会话，切换到新对话
     if (currentSessionId.value === sessionId) {
@@ -1199,20 +1303,64 @@ const deleteSession = (sessionId: string) => {
   }
 }
 
+// 页面可见性变化处理函数
+const handleVisibilityChange = () => {
+  if (!document.hidden) {
+    // 页面变为可见时，检查连接状态
+    if (sseConnectionManager.hasActiveConnection()) {
+      const connectionInfo = sseConnectionManager.getConnectionInfo()
+      if (connectionInfo?.eventSource) {
+        try {
+          if (connectionInfo.eventSource.readyState !== EventSource.OPEN) {
+            console.log('页面可见时发现连接已失效，清理连接信息')
+            sseConnectionManager.clearConnection()
+            // 如果连接失效且当前没有其他连接，尝试重新初始化
+            if (!isInitializing.value && !isConnected.value && !eventSource.value) {
+              console.log('页面可见时重新初始化连接')
+              initializeSession()
+            }
+          }
+        } catch (error) {
+          console.log('页面可见时检查连接状态出错，清理连接信息:', error)
+          sseConnectionManager.clearConnection()
+        }
+      }
+    } else if (!isConnected.value && !isInitializing.value && !eventSource.value) {
+      // 如果没有活跃连接且当前也没有连接，尝试初始化
+      console.log('页面可见时发现无连接，尝试初始化')
+      initializeSession()
+    }
+  }
+}
 
+// 页面关闭时的连接清理函数
+const handleBeforeUnload = () => {
+  console.log('页面即将关闭，清理SSE连接')
+  // 立即关闭SSE连接
+  if (eventSource.value) {
+    eventSource.value.close()
+    eventSource.value = null
+  }
+  // 清理全局连接管理器
+  sseConnectionManager.clearConnection()
+  // 清理所有定时器
+  if (activityTimeout.value) {
+    clearTimeout(activityTimeout.value)
+    activityTimeout.value = null
+  }
+  if (connectionTimeout.value) {
+    clearTimeout(connectionTimeout.value)
+    connectionTimeout.value = null
+  }
+  stopHeartbeat()
+}
 
 // 生命周期
 onMounted(() => {
-  currentNodeId.value = '1'
-  const rootNode: ConversationNode = {
-    id: '1',
-    content: '您好！我是AI助手，有什么可以帮助您的吗？',
-    type: 'assistant',
-    timestamp: new Date(),
-    children: [],
-    isActive: true
-  }
-  conversationTree.value.set('1', rootNode)
+  // 初始化时不创建根节点，默认显示快速输入模式
+  isViewingHistory.value = false
+  currentNodeId.value = ''
+  currentQuestion.value = null
 
   // 尝试从localStorage加载会话历史
   const storedSessionList = loadSessionListFromStorage()
@@ -1226,6 +1374,9 @@ onMounted(() => {
   if (storedCurrentSessionId) {
     currentSessionId.value = storedCurrentSessionId
     console.log('从localStorage加载当前会话ID:', currentSessionId.value)
+    // 注意：不自动切换到历史查看模式，保持快速输入区域显示
+    // 用户需要主动点击会话记录才切换到历史查看模式
+    console.log('已加载存储的会话ID，但保持快速输入模式')
   }
 
   // 页面加载时检查并清理可能失效的连接
@@ -1245,56 +1396,10 @@ onMounted(() => {
     }
   }
 
-  // 页面可见性变化处理函数
-  const handleVisibilityChange = () => {
-    if (!document.hidden) {
-      // 页面变为可见时，检查连接状态
-      if (sseConnectionManager.hasActiveConnection()) {
-        const connectionInfo = sseConnectionManager.getConnectionInfo()
-        if (connectionInfo?.eventSource) {
-          try {
-            if (connectionInfo.eventSource.readyState !== EventSource.OPEN) {
-              console.log('页面可见时发现连接已失效，清理连接信息')
-              sseConnectionManager.clearConnection()
-              // 如果连接失效，尝试重新初始化
-              if (!isInitializing.value) {
-                initializeSession()
-              }
-            }
-          } catch (error) {
-            console.log('页面可见时检查连接状态出错，清理连接信息:', error)
-            sseConnectionManager.clearConnection()
-          }
-        }
-      }
-    }
-  }
-  
   // 添加页面可见性变化监听器
   document.addEventListener('visibilitychange', handleVisibilityChange)
-
-  // 添加页面关闭时的连接清理
-  const handleBeforeUnload = () => {
-    console.log('页面即将关闭，清理SSE连接')
-    // 立即关闭SSE连接
-    if (eventSource.value) {
-      eventSource.value.close()
-      eventSource.value = null
-    }
-    // 清理全局连接管理器
-    sseConnectionManager.clearConnection()
-    // 清理所有定时器
-    if (activityTimeout.value) {
-      clearTimeout(activityTimeout.value)
-      activityTimeout.value = null
-    }
-    if (connectionTimeout.value) {
-      clearTimeout(connectionTimeout.value)
-      connectionTimeout.value = null
-    }
-    stopHeartbeat()
-  }
   
+  // 添加页面关闭时的连接清理
   window.addEventListener('beforeunload', handleBeforeUnload)
 
   // 初始化会话
@@ -1324,6 +1429,8 @@ onUnmounted(() => {
 const handleSendMessage = async (content: string) => {
   // 重置当前问题状态，进入新的对话
   currentQuestion.value = null
+  // 切换到历史查看模式
+  isViewingHistory.value = true
 
   // 后端总是返回nodeId，前端也总是传递nodeId
   const nodeIdToSend = currentNodeId.value
@@ -1744,6 +1851,9 @@ const setNodeAndDescendantsInactive = (nodeId: string) => {
 const handleNodeSelected = (nodeId: string) => {
   const targetNode = conversationTree.value.get(nodeId)
   if (targetNode) {
+    // 切换到历史查看模式
+    isViewingHistory.value = true
+    
     // 首先将所有节点设为非活跃
     conversationTree.value.forEach(node => {
       node.isActive = false

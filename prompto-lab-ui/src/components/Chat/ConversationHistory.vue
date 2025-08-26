@@ -2,7 +2,7 @@
   <div class="conversation-history">
     <div class="sidebar-content">
       <!-- 可展开/收缩的头部按钮 -->
-      <div class="sidebar-toggle" @click="toggleSidebar">
+      <div class="sidebar-toggle" :class="{ expanded: sidebarExpanded, collapsed: !sidebarExpanded }" @click="toggleSidebar">
         <div class="toggle-icon">
           <span class="icon">{{ sidebarExpanded ? '◀' : '▶' }}</span>
         </div>
@@ -180,6 +180,24 @@ const formatTime = (date: Date | string) => {
   box-shadow:
     0 4px 16px rgba(0, 0, 0, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  min-height: 80px; /* 确保收缩时有最小高度 */
+  justify-content: center; /* 收缩时居中显示图标 */
+}
+
+/* 收缩状态下的样式优化 */
+.sidebar-toggle:has(.toggle-text) {
+  justify-content: flex-start; /* 展开时左对齐 */
+}
+
+/* 兼容性处理：如果不支持:has，使用类名控制 */
+.sidebar-toggle.expanded {
+  justify-content: flex-start;
+}
+
+.sidebar-toggle.collapsed {
+  justify-content: center;
+  gap: 0;
+  padding: 16px;
 }
 
 .sidebar-toggle:hover {
