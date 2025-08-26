@@ -1,4 +1,3 @@
-import type { property } from "lodash-es"
 
 export interface SystemOverview {
   totalModels: number

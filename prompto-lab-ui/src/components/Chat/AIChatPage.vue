@@ -32,7 +32,7 @@
     </div>
 
     <!-- 可拖拽的分隔条 -->
-    <div class="resizer" @mousedown="startResize" @touchstart="startResize">
+    <div v-if="false" class="resizer" @mousedown="startResize" @touchstart="startResize">
       <div class="resizer-line"></div>
       <div class="resizer-handle">
         <div class="resizer-dots">
@@ -44,7 +44,7 @@
     </div>
 
     <!-- 右侧思维导图 -->
-    <div class="right-sidebar" :style="{ width: rightSidebarWidth + 'px' }">
+    <div v-if="false" class="right-sidebar" :style="{ width: rightSidebarWidth + 'px' }">
       <MindMapTree :conversation-tree="conversationTree" :current-node-id="currentNodeId"
         @node-selected="handleNodeSelected" @branch-deleted="handleBranchDeleted" />
     </div>
@@ -2100,7 +2100,6 @@ defineExpose({
   /* 从500px进一步增加到600px */
   max-width: 1200px;
   /* 从900px增加到1200px */
-  flex-shrink: 0;
   border-left: 1px solid rgba(212, 175, 55, 0.15);
   position: relative;
   z-index: 2;
@@ -2113,7 +2112,8 @@ defineExpose({
 .main-content {
   display: flex;
   flex-direction: column;
-  min-width: 400px;
+  flex: 1;
+  /* min-width: 400px; */
   /* 恢复到400px */
   background: rgba(10, 10, 10, 0.8);
   backdrop-filter: blur(20px);

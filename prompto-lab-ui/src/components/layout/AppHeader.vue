@@ -192,7 +192,7 @@ onUnmounted(() => {
   /* top: 0; */
   /* z-index: 1000; */
   background: rgba(8, 8, 8, 0.85);
-  backdrop-filter: blur(24px) saturate(180%);
+  /* backdrop-filter: blur(24px) saturate(180%); */
   border-bottom: 1px solid rgba(212, 175, 55, 0.15);
   box-shadow: 
     0 1px 0 rgba(212, 175, 55, 0.1),

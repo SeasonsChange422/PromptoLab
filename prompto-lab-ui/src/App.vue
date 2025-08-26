@@ -3,6 +3,7 @@ import { RouterView } from 'vue-router'
 import { useRoute } from 'vue-router'
 import { ref,onMounted,onUnmounted,computed } from 'vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import { throttle } from './utils/common'
 
 const route = useRoute()
 const appRef = ref<HTMLDivElement>()
@@ -14,10 +15,10 @@ const isScrolled = ref(false)
 const headerHeight = 88 // AppHeader的高度
 
 // 滚动监听函数
-const handleScroll = () => {
+const handleScroll = throttle(() => {
   const scrollTop = appRef.value?.scrollTop || 0
   isScrolled.value = scrollTop > headerHeight
-}
+},100)
 
 // 组件挂载时添加滚动监听
 onMounted(() => {
@@ -58,14 +59,14 @@ onUnmounted(() => {
 /* 主要内容区域 */
 .app-main {
   flex: 1;
-  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+  /* background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%); */
   margin: 0;
   border-radius: 0;
   min-height: 0; /* 重要：允许flex子项收缩 */
 }
 
 .app-main.fullscreen {
-  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+  /* background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%); */
   margin: 0;
   border-radius: 0;
 }
@@ -75,8 +76,8 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   z-index: 1001;
-  background: rgba(8, 8, 8, 0.1);
-  backdrop-filter: blur(20px) saturate(180%);
+  background: rgba(8, 8, 8, 0.8);
+  /* backdrop-filter: blur(20px) saturate(180%); */
   border-bottom: 1px solid rgba(212, 175, 55, 0.2);
   box-shadow: 
     0 2px 20px rgba(0, 0, 0, 0.3),

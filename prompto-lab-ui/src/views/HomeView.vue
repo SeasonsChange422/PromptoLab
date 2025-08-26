@@ -373,7 +373,7 @@ onUnmounted(() => {
 /* 基础样式 */
 .home {
   min-height: 100vh;
-  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
+  /* background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%); */
   color: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   position: relative;
@@ -499,7 +499,7 @@ onUnmounted(() => {
   border-radius: 50px;
   padding: 12px 24px;
   margin-bottom: 32px;
-  backdrop-filter: blur(10px);
+  /* backdrop-filter: blur(10px); */
   transition: all 0.3s ease;
 }
 
@@ -629,7 +629,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
+  /* backdrop-filter: blur(10px); */
 }
 
 .btn-secondary:hover {
@@ -678,8 +678,8 @@ onUnmounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(20px);
+  /* box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); */
+  /* backdrop-filter: blur(20px); */
 }
 
 .code-header {
@@ -788,7 +788,7 @@ onUnmounted(() => {
   border: 1px solid rgba(212, 175, 55, 0.3);
   border-radius: 12px;
   padding: 16px 20px;
-  backdrop-filter: blur(10px);
+  /* backdrop-filter: blur(10px); */
   display: flex;
   align-items: center;
   gap: 12px;
@@ -839,8 +839,8 @@ onUnmounted(() => {
   padding: 120px 0;
   position: relative;
   z-index: 2;
-  background: linear-gradient(135deg, rgba(26, 26, 26, 0.8), rgba(10, 10, 10, 0.9));
-  backdrop-filter: blur(20px);
+  background: rgba(0,0,0,0.4);
+  /* backdrop-filter: blur(20px); */
 }
 
 .section-header {
@@ -857,7 +857,7 @@ onUnmounted(() => {
   border-radius: 50px;
   padding: 12px 24px;
   margin-bottom: 32px;
-  backdrop-filter: blur(10px);
+  /* backdrop-filter: blur(10px); */
 }
 
 .badge-dot {
@@ -926,7 +926,7 @@ onUnmounted(() => {
   transition: all 0.4s ease;
   position: relative;
   overflow: hidden;
-  backdrop-filter: blur(20px);
+  /* backdrop-filter: blur(20px); */
 }
 
 .feature-card::before {
@@ -1062,8 +1062,8 @@ onUnmounted(() => {
   padding: 80px 0;
   position: relative;
   z-index: 2;
-  background: rgba(10, 10, 10, 0.5);
-  backdrop-filter: blur(20px);
+  /* background: rgba(10, 10, 10, 0.5); */
+  /* backdrop-filter: blur(20px); */
 }
 
 .stats-grid {
@@ -1080,11 +1080,11 @@ onUnmounted(() => {
   align-items: center;
   text-align: center;
   padding: 32px 24px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  /* background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)); */
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
   transition: all 0.3s ease;
-  backdrop-filter: blur(20px);
+  /* backdrop-filter: blur(20px); */
 }
 
 .stat-item:hover {
@@ -1131,7 +1131,7 @@ onUnmounted(() => {
   position: relative;
   z-index: 2;
   background: linear-gradient(135deg, rgba(212, 175, 55, 0.05), rgba(10, 10, 10, 0.8));
-  backdrop-filter: blur(20px);
+  /* backdrop-filter: blur(20px); */
 }
 
 .cta-content {
