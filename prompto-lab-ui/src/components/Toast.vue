@@ -107,7 +107,7 @@ const props = withDefaults(defineProps<Props>(), {
   duration: 2000,
   closable: true,
   showProgress: true,
-  position: 'center',
+  position: 'top',
   offset: 0
 })
 

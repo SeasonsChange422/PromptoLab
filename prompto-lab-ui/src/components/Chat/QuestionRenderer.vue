@@ -8,31 +8,123 @@
     </div>
 
     <!-- 对话历史显示 -->
-    <div v-if="!currentQuestion && conversationTree && conversationTree.size > 0" class="conversation-history">
+    <div v-if="!currentQuestion && isViewingHistory" class="conversation-history">
       <div class="history-header">
         <h3>对话历史</h3>
-        <p>点击任意节点继续对话</p>
+        <p v-if="conversationTree && conversationTree.size > 0">点击任意节点继续对话</p>
+        <p v-else>该会话暂无历史记录</p>
       </div>
-      <div class="conversation-nodes">
+      <div v-if="conversationTree && conversationTree.size > 0" class="chat-messages">
         <div 
           v-for="[nodeId, node] in conversationTree" 
           :key="nodeId"
           @click="emit('nodeSelected', nodeId)"
-          class="conversation-node"
+          class="chat-message"
           :class="{ 
-            'user-node': node.type === 'user', 
-            'assistant-node': node.type === 'assistant',
-            'active-node': nodeId === currentNodeId
+            'message-left': node.type === 'assistant',
+            'message-right': node.type === 'user',
+            'active-message': nodeId === currentNodeId
           }"
         >
-          <div class="node-content">{{ node.content }}</div>
-          <div class="node-timestamp">{{ formatTimestamp(node.timestamp) }}</div>
+          <div class="message-bubble">
+            <!-- AI问题（左侧） -->
+            <template v-if="node.type === 'assistant'">
+              <!-- 检查是否为结构化问题数据 -->
+              <template v-if="isStructuredQuestion(node.content)">
+                <!-- 渲染结构化问题 -->
+                <div class="structured-question-chat">
+                  <div class="question-title-chat">
+                    <span class="question-icon">{{ getQuestionIcon(parseStructuredQuestion(node.content).type) }}</span>
+                    {{ parseStructuredQuestion(node.content).question }}
+                  </div>
+                  <div v-if="parseStructuredQuestion(node.content).desc" class="question-desc-chat">
+                    {{ parseStructuredQuestion(node.content).desc }}
+                  </div>
+                  
+                  <!-- 根据问题类型渲染不同的预览 -->
+                  <div class="question-options-chat">
+                    <template v-if="parseStructuredQuestion(node.content).type === 'form'">
+                      <div class="form-fields-preview">
+                        <div v-for="field in parseStructuredQuestion(node.content).fields" 
+                             :key="field.id" 
+                             class="field-preview">
+                          <div class="field-title">{{ field.question }}</div>
+                          <div class="field-options">
+                            <span v-for="option in field.options?.slice(0, 3)" 
+                                  :key="option.id" 
+                                  class="option-chip" 
+                                  :class="field.type">{{ option.label }}</span>
+                            <span v-if="field.options?.length > 3" class="more-options">+{{ field.options.length - 3 }}个选项</span>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                    
+                    <template v-else>
+                      <div class="options-list">
+                        <span v-for="option in parseStructuredQuestion(node.content).options?.slice(0, 4)" 
+                              :key="option.id" 
+                              class="option-chip" 
+                              :class="parseStructuredQuestion(node.content).type">{{ option.label }}</span>
+                        <span v-if="parseStructuredQuestion(node.content).options?.length > 4" class="more-options">+{{ parseStructuredQuestion(node.content).options.length - 4 }}个选项</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              
+              <!-- 普通文本问题 -->
+              <template v-else>
+                <!-- 检查是否包含结构化内容但未被正确识别 -->
+                <template v-if="containsStructuredContent(node.content)">
+                  <div class="message-text ai-message">
+                    <div v-html="formatAIMessage(node.content)"></div>
+                    <!-- 如果内容中包含可交互的问题，在这里添加交互组件 -->
+                    <div v-if="extractQuestionFromContent(node.content)" class="embedded-question">
+                      <div class="question-container">
+                        <template v-if="extractQuestionFromContent(node.content).type === 'single'">
+                           <SingleChoiceOptions
+                             :options="extractQuestionFromContent(node.content).options"
+                             :selected-value="embeddedAnswers[nodeId] || ''"
+                             :disabled="false"
+                             @update:selected-value="handleEmbeddedAnswer(nodeId, $event)"
+                           />
+                         </template>
+                         <template v-else-if="extractQuestionFromContent(node.content).type === 'multi'">
+                           <MultipleChoiceOptions
+                             :options="extractQuestionFromContent(node.content).options"
+                             :selected-values="embeddedAnswers[nodeId] || []"
+                             :disabled="false"
+                             @update:selected-values="handleEmbeddedAnswer(nodeId, $event)"
+                           />
+                         </template>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="message-text ai-message" v-html="formatAIMessage(node.content)"></div>
+                </template>
+              </template>
+            </template>
+            
+            <!-- 用户回答（右侧） -->
+            <template v-else>
+              <div class="message-text user-message">{{ node.content }}</div>
+            </template>
+          </div>
+          <div class="message-time">{{ formatTimestamp(node.timestamp) }}</div>
         </div>
+      </div>
+      <div v-else class="empty-history">
+        <div class="empty-icon">📝</div>
+        <p>这个会话还没有对话记录</p>
+        <p class="empty-hint">开始新的对话来创建历史记录</p>
       </div>
     </div>
 
     <!-- 初始状态：大输入框和快捷按钮 -->
-    <div v-else-if="!currentQuestion" class="initial-state">
+    <div v-else-if="!currentQuestion && !isViewingHistory" class="initial-state">
       <div class="welcome-section">
         <div class="welcome-icon">
           <div class="icon-glow"></div>
@@ -232,7 +324,7 @@
         <button 
           @click="generatePrompt"
           class="reset-btn"
-          :disabled="isLoading"
+          :disabled="isLoading || isGeneratingPrompt"
         >
           <span class="btn-icon">✨</span>
           <span class="btn-text">生成提示词</span>
@@ -380,6 +472,7 @@ interface Props {
   userId?: string
   conversationTree?: Map<string, ConversationNode>
   currentNodeId?: string
+  isViewingHistory?: boolean
 }
 
 const props = defineProps<Props>()
@@ -548,6 +641,74 @@ const formatTimestamp = (timestamp: Date) => {
   })
 }
 
+// 格式化AI消息内容
+const formatAIMessage = (content: string) => {
+  if (!content) return ''
+  
+  let formatted = content
+    // 处理Markdown标题
+    .replace(/^### (.+)$/gm, '<h3 class="ai-h3">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="ai-h2">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="ai-h1">$1</h1>')
+    // 处理【标题】格式
+    .replace(/【([^】]+)】/g, '<div class="ai-section-title">$1</div>')
+    // 处理粗体
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="ai-bold">$1</strong>')
+    // 处理代码块
+    .replace(/```([\s\S]*?)```/g, '<pre class="ai-code-block"><code>$1</code></pre>')
+    // 处理行内代码
+    .replace(/`([^`]+)`/g, '<code class="ai-inline-code">$1</code>')
+    // 处理有序列表
+    .replace(/^(\d+\.)\s+(.+)$/gm, '<div class="ai-list-item"><span class="ai-list-number">$1</span><span class="ai-list-content">$2</span></div>')
+    // 处理无序列表
+    .replace(/^[-•*]\s+(.+)$/gm, '<div class="ai-bullet-item"><span class="ai-bullet">•</span><span class="ai-list-content">$1</span></div>')
+    // 处理段落分隔
+    .replace(/\n\n/g, '</div><div class="ai-paragraph">')
+    .replace(/\n/g, '<br>')
+  
+  // 包装在段落容器中
+  return `<div class="ai-paragraph">${formatted}</div>`
+}
+
+// 检查内容是否包含结构化内容
+const containsStructuredContent = (content: string) => {
+  // 检查是否包含选择题格式
+  return /[A-D]\)\s+/.test(content) || /\d+\.\s+/.test(content) || /请选择|请回复/.test(content)
+}
+
+// 从内容中提取问题结构
+const extractQuestionFromContent = (content: string) => {
+  // 简单的选择题提取逻辑
+  const optionMatches = content.match(/([A-D])\)\s+([^\n]+)/g)
+  if (optionMatches && optionMatches.length >= 2) {
+    const options = optionMatches.map((match, index) => {
+      const [, letter, text] = match.match(/([A-D])\)\s+(.+)/) || []
+      return {
+        id: letter || String.fromCharCode(65 + index),
+        label: text || match,
+        value: letter || String.fromCharCode(65 + index)
+      }
+    })
+    
+    return {
+      type: 'single',
+      options
+    }
+  }
+  
+  return null
+}
+
+// 嵌入式答案状态
+const embeddedAnswers = ref<Record<string, any>>({})
+
+// 处理嵌入式答案
+const handleEmbeddedAnswer = (nodeId: string, answer: any) => {
+  embeddedAnswers.value[nodeId] = answer
+  console.log('嵌入式答案更新:', nodeId, answer)
+  // 这里可以添加自动提交逻辑或其他处理
+}
+
 const handleFormFieldChange = (fieldId: string, value: any) => {
   // 表单字段变化处理，已通过v-model自动处理
   
@@ -660,8 +821,21 @@ const resetQuestion = () => {
   emit('sendMessage', '重新开始')
 }
 
+// 防抖相关
+let generatePromptTimeout: NodeJS.Timeout | null = null
+const isGeneratingPrompt = ref(false)
+
 // 提示词相关方法
 const generatePrompt = async () => {
+  // 防抖：如果正在生成或者有待处理的生成请求，则忽略
+  if (isGeneratingPrompt.value || generatePromptTimeout) {
+    console.log('QuestionRenderer: 生成提示词请求被防抖机制拦截');
+    return;
+  }
+  
+  // 设置防抖标志
+  isGeneratingPrompt.value = true;
+  
   console.log('QuestionRenderer: 开始生成提示词', {
     currentQuestion: props.currentQuestion,
     isLoading: props.isLoading,
@@ -676,11 +850,26 @@ const generatePrompt = async () => {
     let answerData: any = null;
     
     if (props.currentQuestion) {
-      // 如果有当前问题，按照问题类型处理
-      if (!isAnswerValid() || props.isLoading) {
+      // 如果有当前问题，检查是否可以基于历史数据生成
+      // 在历史查看模式下，即使sessionId为null也应该允许生成（因为已有qaTree数据）
+      const canGenerateFromHistory = props.isViewingHistory;
+      console.log('QuestionRenderer: 历史模式检测', {
+        isViewingHistory: props.isViewingHistory,
+        sessionId: props.sessionId,
+        canGenerateFromHistory: canGenerateFromHistory,
+        isAnswerValid: isAnswerValid()
+      });
+      
+      if (!canGenerateFromHistory && (!isAnswerValid() || props.isLoading)) {
         console.log('QuestionRenderer: 答案无效或正在加载中，取消生成提示词');
         return;
       }
+      
+      // 如果可以基于历史数据生成且用户没有回答，则不传递answer
+      if (canGenerateFromHistory && !isAnswerValid()) {
+        answerData = null; // 不传递answer，让后端基于现有qaTree生成
+        console.log('QuestionRenderer: 基于历史数据生成提示词（无用户回答）');
+      } else {
       
       switch (props.currentQuestion.type) {
         case 'input':
@@ -703,22 +892,33 @@ const generatePrompt = async () => {
           }))
           break
       }
+      } // 结束 else 分支
     } else {
-      // 如果没有当前问题，检查快速输入或主输入框
-      if (quickInputs.introduce && quickInputs.introduce.trim().length > 0) {
-        answerData = '自我介绍：' + quickInputs.introduce.trim();
-      } else if (quickInputs.model && quickInputs.model.trim().length > 0) {
-        answerData = '使用模型：' + quickInputs.model.trim();
-      } else if (mainInput.value && mainInput.value.trim().length > 0) {
-        answerData = mainInput.value.trim();
+      // 如果没有当前问题，检查是否在历史查看模式
+      if (props.isViewingHistory && props.sessionId) {
+        // 在历史查看模式且有sessionId，说明有qaTree数据，可以生成提示词
+        answerData = 'HISTORY_MODE'; // 特殊标识，表示基于历史数据生成
+        console.log('QuestionRenderer: 基于历史会话数据生成提示词', { sessionId: props.sessionId });
       } else {
-        console.log('QuestionRenderer: 没有输入内容，取消生成提示词');
-        toast.error('请输入内容后再生成提示词。');
-        return;
+        // 如果不在历史模式，检查快速输入或主输入框
+        if (quickInputs.introduce && quickInputs.introduce.trim().length > 0) {
+          answerData = '自我介绍：' + quickInputs.introduce.trim();
+        } else if (quickInputs.model && quickInputs.model.trim().length > 0) {
+          answerData = '使用模型：' + quickInputs.model.trim();
+        } else if (mainInput.value && mainInput.value.trim().length > 0) {
+          answerData = mainInput.value.trim();
+        } else {
+          console.log('QuestionRenderer: 没有输入内容，取消生成提示词');
+          toast.error('请输入内容后再生成提示词。');
+          return;
+        }
       }
     }
     
-    if (!answerData) {
+    if (answerData === null) {
+      // answerData为null是有效的，表示基于历史数据生成
+      console.log('QuestionRenderer: 基于历史数据生成提示词，answerData为null是正常的');
+    } else if (!answerData) {
       console.log('QuestionRenderer: 没有有效的输入内容，取消生成提示词');
       toast.error('请输入内容后再生成提示词。');
       return;
@@ -727,9 +927,18 @@ const generatePrompt = async () => {
     console.log('QuestionRenderer: 准备发送生成提示词事件', { answerData });
     // 同时触发事件给父组件
     emit('generatePrompt', answerData)
+    
+    // 设置防抖超时，防止短时间内重复调用
+    generatePromptTimeout = setTimeout(() => {
+      generatePromptTimeout = null;
+    }, 1000); // 1秒防抖
+    
   } catch (error) {
     console.error('生成提示词失败:', error)
     toast.error('生成提示词失败，请重试。');
+  } finally {
+    // 重置防抖标志
+    isGeneratingPrompt.value = false;
   }
 }
 
@@ -777,6 +986,91 @@ const closePromptResult = () => {
   promptResult.value = ''
   showPromptResult.value = false
   copySuccess.value = false
+}
+
+// 检查内容是否为结构化问题数据
+const isStructuredQuestion = (content: string): boolean => {
+  try {
+    const parsed = JSON.parse(content)
+    // 检查是否为单个问题对象
+    if (parsed && typeof parsed === 'object' && parsed.type && parsed.question) {
+      return true
+    }
+    // 检查是否为问题数组（表单类型）
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type && parsed[0].question) {
+      return true
+    }
+    return false
+  } catch (e) {
+    // 如果直接解析失败，尝试检查"描述文本:[JSON数组]"格式
+    try {
+      const colonIndex = content.indexOf(':')
+      if (colonIndex > 0) {
+        const jsonPart = content.substring(colonIndex + 1).trim()
+        const parsed = JSON.parse(jsonPart)
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type && parsed[0].question) {
+          return true
+        }
+      }
+      return false
+    } catch (e2) {
+      return false
+    }
+  }
+}
+
+// 解析结构化问题数据
+const parseStructuredQuestion = (content: string): Question | null => {
+  try {
+    // 首先尝试直接解析JSON
+    const parsed = JSON.parse(content)
+    // 如果是单个问题对象
+    if (parsed && typeof parsed === 'object' && parsed.type && parsed.question) {
+      return parsed as Question
+    }
+    // 如果是问题数组，转换为表单问题格式
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type && parsed[0].question) {
+      return {
+        type: 'form',
+        question: '为了帮你定制最合适的提示词，请补充以下关键信息：',
+        desc: '',
+        fields: parsed.map((item: any) => ({
+          id: item.id,
+          question: item.question,
+          type: item.type,
+          options: item.options || []
+        }))
+      } as Question
+    }
+    return null
+  } catch (e) {
+    // 如果直接解析失败，尝试解析"描述文本:[JSON数组]"格式
+    try {
+      const colonIndex = content.indexOf(':')
+      if (colonIndex > 0) {
+        const descriptionText = content.substring(0, colonIndex).trim()
+        const jsonPart = content.substring(colonIndex + 1).trim()
+        
+        const parsed = JSON.parse(jsonPart)
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type && parsed[0].question) {
+          return {
+            type: 'form',
+            question: descriptionText,
+            desc: '',
+            fields: parsed.map((item: any) => ({
+              id: item.id,
+              question: item.question,
+              type: item.type,
+              options: item.options || []
+            }))
+          } as Question
+        }
+      }
+      return null
+    } catch (e2) {
+      return null
+    }
+  }
 }
 
 // 获取当前组件实例
@@ -2330,5 +2624,453 @@ defineExpose({
   color: #ffffff;
   transform: translateY(-1px);
   box-shadow: 0 4px 15px rgba(255, 165, 0, 0.3);
+}
+
+/* 空历史状态样式 */
+.empty-history {
+  text-align: center;
+  padding: 60px 20px;
+  color: #999;
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 20px;
+  opacity: 0.6;
+}
+
+.empty-history p {
+  margin: 8px 0;
+  font-size: 16px;
+}
+
+.empty-hint {
+  font-size: 14px !important;
+  color: #666 !important;
+}
+
+/* 聊天消息样式 */
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.chat-message:hover {
+  transform: translateY(-1px);
+}
+
+.chat-message.active-message .message-bubble {
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.5);
+}
+
+/* AI消息（左侧） */
+.message-left {
+  align-items: flex-start;
+}
+
+.message-left .message-bubble {
+  background: transparent; /* AI消息的背景由ai-message类控制 */
+  border: none;
+  border-radius: 18px 18px 18px 4px;
+  max-width: 85%; /* 增加最大宽度以适应长文本 */
+  margin-right: auto;
+  padding: 0; /* 移除padding，由ai-message控制 */
+}
+
+/* 用户消息（右侧） */
+.message-right {
+  align-items: flex-end;
+}
+
+.message-right .message-bubble {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.2), rgba(184, 134, 11, 0.2));
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 18px 18px 4px 18px;
+  max-width: 80%;
+  margin-left: auto;
+}
+
+.message-bubble {
+  padding: 12px 16px;
+  backdrop-filter: blur(10px);
+  transition: all 0.2s ease;
+}
+
+.message-text {
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.ai-message {
+  color: #f0f0f0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  letter-spacing: 0.2px;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, rgba(30, 30, 30, 0.95), rgba(20, 20, 20, 0.98));
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  position: relative;
+}
+
+.ai-message::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.3), transparent);
+  border-radius: 16px 16px 0 0;
+}
+
+/* AI消息格式化样式 */
+.ai-h1 {
+  font-size: 20px;
+  font-weight: 800;
+  color: #f4d03f;
+  margin: 20px 0 16px 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid rgba(212, 175, 55, 0.3);
+}
+
+.ai-h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f4d03f;
+  margin: 18px 0 14px 0;
+  padding-left: 12px;
+  border-left: 3px solid #d4af37;
+}
+
+.ai-h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e8e8e8;
+  margin: 16px 0 12px 0;
+}
+
+.ai-section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f4d03f;
+  margin: 16px 0 12px 0;
+  padding: 8px 12px;
+  background: rgba(212, 175, 55, 0.1);
+  border-left: 3px solid #d4af37;
+  border-radius: 4px;
+}
+
+.ai-paragraph {
+  margin: 12px 0;
+  line-height: 1.7;
+  color: #e8e8e8;
+}
+
+.ai-bold {
+  font-weight: 600;
+  color: #f4d03f;
+}
+
+.ai-code-block {
+  background: rgba(20, 20, 20, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-code-block code {
+  color: #e8e8e8;
+  background: none;
+  padding: 0;
+  border: none;
+}
+
+.ai-inline-code {
+  background: rgba(212, 175, 55, 0.15);
+  color: #f4d03f;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+}
+
+.ai-list-item {
+  display: flex;
+  align-items: flex-start;
+  margin: 8px 0;
+  padding-left: 8px;
+}
+
+.ai-list-number {
+  color: #d4af37;
+  font-weight: 600;
+  margin-right: 12px;
+  min-width: 24px;
+  flex-shrink: 0;
+}
+
+.ai-list-content {
+  flex: 1;
+  line-height: 1.6;
+}
+
+.ai-bullet-item {
+  display: flex;
+  align-items: flex-start;
+  margin: 8px 0;
+  padding-left: 8px;
+}
+
+.ai-bullet {
+  color: #d4af37;
+  font-weight: 600;
+  margin-right: 12px;
+  min-width: 16px;
+  flex-shrink: 0;
+}
+
+.ai-bullet-content {
+  flex: 1;
+  line-height: 1.6;
+}
+
+/* Markdown标题样式 */
+.ai-h1 {
+  font-size: 24px;
+  font-weight: 800;
+  color: #f4d03f;
+  margin: 24px 0 16px 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid rgba(212, 175, 55, 0.3);
+}
+
+.ai-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #f4d03f;
+  margin: 20px 0 12px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.2);
+}
+
+.ai-h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #f4d03f;
+  margin: 16px 0 10px 0;
+}
+
+/* 文本格式样式 */
+.ai-bold {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* 代码样式 */
+.ai-code-block {
+  background: rgba(20, 20, 20, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  overflow-x: auto;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ai-code-block code {
+  color: #e8e8e8;
+  background: none;
+  padding: 0;
+  border: none;
+}
+
+.ai-inline-code {
+  background: rgba(212, 175, 55, 0.15);
+  color: #f4d03f;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  border: 1px solid rgba(212, 175, 55, 0.2);
+}
+
+/* 列表内容样式 */
+.ai-list-content {
+  flex: 1;
+  line-height: 1.6;
+}
+
+/* 嵌入式问题样式 */
+.embedded-question {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.embedded-question .question-container {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* 确保嵌入式选项组件的样式正确 */
+.embedded-question .choice-options {
+  margin: 0;
+}
+
+.embedded-question .choice-option {
+  margin: 6px 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.embedded-question .choice-option:hover {
+  background: rgba(212, 175, 55, 0.1);
+  border-color: rgba(212, 175, 55, 0.3);
+}
+
+.embedded-question .choice-option.selected {
+  background: rgba(212, 175, 55, 0.2);
+  border-color: rgba(212, 175, 55, 0.5);
+  color: #f4d03f;
+}
+
+.user-message {
+  color: #f0f0f0;
+}
+
+.message-time {
+  font-size: 11px;
+  color: #888;
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+.message-left .message-time {
+  text-align: left;
+}
+
+.message-right .message-time {
+  text-align: right;
+}
+
+/* 结构化问题聊天样式 */
+.structured-question-chat {
+  width: 100%;
+}
+
+.question-title-chat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e8e8e8;
+  margin-bottom: 8px;
+}
+
+.question-icon {
+  font-size: 18px;
+  opacity: 0.9;
+}
+
+.question-desc-chat {
+  font-size: 13px;
+  color: #bbb;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+.question-options-chat {
+  margin-top: 12px;
+}
+
+.form-fields-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field-preview {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.field-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #ddd;
+  margin-bottom: 6px;
+}
+
+.field-options, .options-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.option-chip {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.option-chip.single {
+  background: rgba(212, 175, 55, 0.15);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  color: #d4af37;
+}
+
+.option-chip.multi {
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  color: #4caf50;
+}
+
+.more-options {
+  font-size: 11px;
+  color: #888;
+  font-style: italic;
+  padding: 4px 8px;
+  background: rgba(128, 128, 128, 0.1);
+  border-radius: 12px;
+  border: 1px solid rgba(128, 128, 128, 0.2);
 }
 </style>
