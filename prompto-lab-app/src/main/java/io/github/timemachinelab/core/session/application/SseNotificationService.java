@@ -17,168 +17,159 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * SSE通知服务
  * 负责管理SSE连接和发送消息给客户端
- * 
+ *
  * @author suifeng
  * 日期: 2025/1/27
  */
 @Service
 @Slf4j
 public class SseNotificationService {
-    
+
     @Resource
     private SessionManagementService sessionManagementService;
     @Resource
     private QaTreeDomain qaTreeDomain;
-    
-    // SSE连接管理
+
+    // SSE连接管理 - 基于用户指纹的一对一关系
     private final Map<String, SseEmitter> sseEmitters = new ConcurrentHashMap<>();
-    
+
     /**
      * 注册SSE连接
-     * 
-     * @param sessionId 会话ID
+     *
+     * @param fingerprint 用户指纹
      * @param emitter SSE发射器
      */
-    public void registerSseConnection(String sessionId, SseEmitter emitter) {
-        sseEmitters.put(sessionId, emitter);
-        log.info("SSE连接已注册 - 会话: {}", sessionId);
+    public void registerSseConnection(String fingerprint, SseEmitter emitter) {
+        // 如果用户已有连接，先移除旧连接
+        SseEmitter oldEmitter = sseEmitters.get(fingerprint);
+        if (oldEmitter != null) {
+            // 静默关闭旧连接，避免向已断开的连接发送消息导致 Broken pipe 错误
+            try {
+                oldEmitter.complete(); // 直接完成旧连接，不发送关闭通知
+                log.info("旧SSE连接已静默关闭 - 用户指纹: {}", fingerprint);
+            } catch (Exception e) {
+                log.warn("关闭旧连接时出错 - 用户指纹: {}, 错误: {}", fingerprint, e.getMessage());
+            }
+        }
+
+        sseEmitters.put(fingerprint, emitter);
+        log.info("SSE连接已注册 - 用户指纹: {}", fingerprint);
+        
+        // 注意：回调处理由Controller层统一管理，避免重复设置
     }
-    
+
     /**
      * 移除SSE连接
-     * 
-     * @param sessionId 会话ID
+     *
+     * @param fingerprint 用户指纹
      */
-    public void removeSseConnection(String sessionId) {
-        sseEmitters.remove(sessionId);
-        log.info("SSE连接已移除 - 会话: {}", sessionId);
-    }
-    
-    /**
-     * 发送SSE消息给客户端
-     * 
-     * @param sessionId 会话ID
-     * @param response 消息响应对象
-     */
-    public void sendSseMessage(String sessionId, QuestionGenerationOperation.QuestionGenerationResponse response) {
-        SseEmitter emitter = sseEmitters.get(sessionId);
+    public void removeSseConnection(String fingerprint) {
+        SseEmitter emitter = sseEmitters.get(fingerprint);
         if (emitter != null) {
             try {
-                String currentNodeId = null;
-                
-                // 1. 先将AI生成的新问题添加到QaTree（只填入question，answer留空）
-                ConversationSession session = sessionManagementService.getSessionById(sessionId);
-                if (session != null && session.getQaTree() != null && response.getQuestion() != null) {
-                    // 使用QaTreeDomain添加新节点，answer字段会自动为空
-                    // appendNode方法内部会调用session.getNextNodeId()获取新节点ID
-                    QaTree qaTree = qaTreeDomain.appendNode(
-                            session.getQaTree(),
-                            response.getParentId(),
-                            response.getQuestion(),
-                            session
-                    );
-                    
-                    // 获取刚刚创建的节点ID（当前计数器的值）
-                    currentNodeId = String.valueOf(session.getNodeIdCounter().get());
-                    
-                    log.info("AI问题已添加到QaTree - 会话: {}, 父节点: {}, 新节点ID: {}, 问题类型: {}",
-                            sessionId, response.getParentId(), currentNodeId, response.getQuestion().getType());
-                } else {
-                    log.warn("无法添加问题到QaTree - 会话: {}, session存在: {}, qaTree存在: {}, question存在: {}", 
-                            sessionId, session != null, 
-                            session != null && session.getQaTree() != null,
-                            response.getQuestion() != null);
-                }
-                
-                // 2. 创建修改后的响应对象，包含currentNodeId和parentNodeId
-                Map<String, Object> modifiedResponse = new HashMap<>();
-                modifiedResponse.put("question", response.getQuestion());
-                modifiedResponse.put("currentNodeId", currentNodeId != null ? currentNodeId : response.getParentId());
-                modifiedResponse.put("parentNodeId", response.getParentId());
-                
-                // 3. 发送SSE消息给前端
+                // 在关闭连接前通知客户端
                 emitter.send(SseEmitter.event()
-                    .name("message")
-                    .data(modifiedResponse));
-                log.info("SSE消息发送成功 - 会话: {}, 当前节点ID: {}", sessionId, currentNodeId);
+                    .name("close")
+                    .data("服务器主动关闭连接"));
+                log.info("已发送连接关闭通知 - 用户指纹: {}", fingerprint);
             } catch (IOException e) {
-                log.error("SSE消息发送失败 - 会话: {}, 错误: {}", sessionId, e.getMessage());
-                sseEmitters.remove(sessionId);
-            } catch (Exception e) {
-                log.error("添加问题到QaTree失败 - 会话: {}, 错误: {}", sessionId, e.getMessage());
-                // 即使QaTree更新失败，仍然发送SSE消息给前端
-                try {
-                    Map<String, Object> fallbackResponse = new HashMap<>();
-                    fallbackResponse.put("question", response.getQuestion());
-                    fallbackResponse.put("currentNodeId", response.getParentId()); // 使用parentId作为fallback
-                    fallbackResponse.put("parentNodeId", response.getParentId());
-                    
-                    emitter.send(SseEmitter.event()
-                        .name("message")
-                        .data(fallbackResponse));
-                    log.info("SSE消息发送成功（QaTree更新失败但消息已发送） - 会话: {}", sessionId);
-                } catch (IOException ioException) {
-                    log.error("SSE消息发送失败 - 会话: {}, 错误: {}", sessionId, ioException.getMessage());
-                    sseEmitters.remove(sessionId);
-                }
+                log.warn("发送连接关闭通知失败 - 用户指纹: {}, 错误: {}", fingerprint, e.getMessage());
+            } catch (IllegalStateException e) {
+                log.warn("连接已关闭，无法发送关闭通知 - 用户指纹: {}", fingerprint);
             }
-        } else {
-            log.warn("SSE连接不存在 - 会话: {}", sessionId);
+            
+            // 移除并完成连接
+            sseEmitters.remove(fingerprint);
+            emitter.complete();
         }
+        log.info("SSE连接已移除 - 用户指纹: {}", fingerprint);
     }
-    
+
+    /**
+     * 检查SSE连接是否存在
+     *
+     * @param fingerprint 用户指纹
+     * @return 连接是否存在
+     */
+    public boolean isConnectionExists(String fingerprint) {
+        return sseEmitters.containsKey(fingerprint);
+    }
+
     /**
      * 获取SSE连接状态
-     * 
+     *
      * @return 连接状态信息
      */
     public Map<String, Object> getSseStatus() {
         Map<String, Object> status = new ConcurrentHashMap<>();
-        status.put("connectedSessions", sseEmitters.keySet());
+        status.put("connectedFingerprints", sseEmitters.keySet()); // 改为显示指纹列表
         status.put("totalConnections", sseEmitters.size());
         status.put("timestamp", System.currentTimeMillis());
         return status;
     }
-    
+
     /**
-     * 发送欢迎消息
-     * 
-     * @param sessionId 会话ID
-     * @param message 欢迎消息内容
+     * 通用SSE消息发送方法
+     *
+     * @param fingerprint 用户指纹
+     * @param eventName 事件名称
+     * @param data 消息数据
      */
-    public void sendWelcomeMessage(String sessionId, String message) {
-        SseEmitter emitter = sseEmitters.get(sessionId);
+    private void sendSseEvent(String fingerprint, String eventName, Object data) {
+        SseEmitter emitter = sseEmitters.get(fingerprint);
         if (emitter != null) {
             try {
                 emitter.send(SseEmitter.event()
-                    .name("connected")
-                    .data(message));
-                log.info("欢迎消息发送成功 - 会话: {}", sessionId);
+                    .name(eventName)
+                    .data(data));
+                log.info("SSE事件发送成功 - 用户指纹: {}, 事件: {}", fingerprint, eventName);
             } catch (IOException e) {
-                log.error("欢迎消息发送失败 - 会话: {}, 错误: {}", sessionId, e.getMessage());
-                sseEmitters.remove(sessionId);
+                log.warn("SSE事件发送失败 - 用户指纹: {}, 事件: {}, 错误: {}", fingerprint, eventName, e.getMessage());
+                // 移除失效的连接
+                sseEmitters.remove(fingerprint);
+            } catch (IllegalStateException e) {
+                log.warn("SSE连接已关闭 - 用户指纹: {}, 事件: {}, 错误: {}", fingerprint, eventName, e.getMessage());
+                // 移除已关闭的连接
+                sseEmitters.remove(fingerprint);
             }
+        } else {
+            log.warn("SSE连接不存在 - 用户指纹: {}, 事件: {}", fingerprint, eventName);
         }
+    }
+
+
+    /**
+     * 发送连接数据
+     *
+     * @param fingerprint 用户指纹
+     * @param connectionData 连接数据
+     */
+    public void sendWelcomeMessage(String fingerprint, Map<String, Object> connectionData) {
+        sendSseEvent(fingerprint, "connected", connectionData);
     }
     
     /**
-     * 发送连接数据
+     * 发送错误消息给客户端
+     * 确保错误时能够立即响应，不会卡住
      * 
-     * @param sessionId 会话ID
-     * @param connectionData 连接数据
+     * @param fingerprint 用户指纹
      */
-    public void sendWelcomeMessage(String sessionId, Map<String, Object> connectionData) {
-        SseEmitter emitter = sseEmitters.get(sessionId);
-        if (emitter != null) {
-            try {
-                emitter.send(SseEmitter.event()
-                    .name("connected")
-                    .data(connectionData));
-                log.info("连接数据发送成功 - 会话: {}", sessionId);
-            } catch (IOException e) {
-                log.error("连接数据发送失败 - 会话: {}, 错误: {}", sessionId, e.getMessage());
-                sseEmitters.remove(sessionId);
-            }
-        }
+    public void sendErrorMessage(String fingerprint, String msg) {
+        sendMessage(fingerprint,msg,"500",false);
+    }
+
+    private void sendMessage(String fingerprint, String msg,String code,boolean success) {
+        Map<String, Object> errorResponse = new HashMap<>();
+        errorResponse.put("success", success);
+        errorResponse.put("code", code);
+        errorResponse.put("data", msg);
+        errorResponse.put("timestamp", System.currentTimeMillis());
+
+        sendSseEvent(fingerprint, success?"success":"error", errorResponse);
+        log.info("消息已发送 - 用户指纹: {}, 代码: {}, 消息: {}", fingerprint, code, msg);
+    }
+
+    public void sendSuccessMessage(String fingerprint,String msg) {
+        sendMessage(fingerprint,msg,"200",true);
     }
 }

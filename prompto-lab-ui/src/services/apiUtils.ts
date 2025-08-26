@@ -1,6 +1,4 @@
 import { toast } from '@/utils/toast'
-import { createApp } from 'vue'
-import LoginGuide from '@/components/LoginGuide.vue'
 
 // API请求工具函数
 export interface RequestOptions {
@@ -28,30 +26,23 @@ function showLoginGuide(options: {
   description?: string
   autoRedirect?: boolean
 } = {}) {
-  const container = document.createElement('div')
-
-  const app = createApp(LoginGuide, {
-    visible: true,
+  // 简化的登录引导，直接跳转到登录页
+  const message = options.description || '您的登录状态已过期，需要重新登录以继续使用'
+  
+  toast.error({
     title: options.title || '登录已过期',
-    description: options.description || '您的登录状态已过期，需要重新登录以继续使用',
-    autoRedirect: options.autoRedirect !== false,
-    redirectDelay: 3000,
-    onConfirm: () => {
-      app.unmount()
-      container.remove()
-      // 跳转到登录页
+    message,
+    duration: 5000
+  })
+  
+  // 跳转到登录页
+  if (options.autoRedirect !== false) {
+    setTimeout(() => {
       if (!window.location.pathname.includes('/auth')) {
         window.location.href = '/auth'
       }
-    },
-    onCancel: () => {
-      app.unmount()
-      container.remove()
-    }
-  })
-
-  app.mount(container)
-  document.body.appendChild(container)
+    }, 3000)
+  }
 }
 
 // 处理认证失败
@@ -74,6 +65,11 @@ function handleRequireLogin() {
 }
 
 // 统一的请求函数
+// 获取指纹
+function getFingerprint(): string | null {
+  return localStorage.getItem('prompto_lab_fingerprint')
+}
+
 export async function apiRequest(url: string, options: RequestOptions = {}): Promise<Response> {
   const {
     method = 'GET',
@@ -86,6 +82,12 @@ export async function apiRequest(url: string, options: RequestOptions = {}): Pro
   const requestHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
     ...headers
+  }
+
+  // 自动携带指纹
+  const fingerprint = getFingerprint()
+  if (fingerprint) {
+    requestHeaders['X-Fingerprint'] = fingerprint
   }
 
   if (requireAuth) {

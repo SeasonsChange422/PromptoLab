@@ -24,12 +24,16 @@ public class ConversationSession {
     private QaTree qaTree; // 移除final，允许后续设置
     private final LocalDateTime createTime;
     private LocalDateTime updateTime;
-
-    private String user; //用户画像
-    private String userTarget; // 用户目标
-    private String aiModel; // AI模型
-
-    private String genPrompt; // 生成提示词
+    
+    // 当前节点ID，用于表示当前question和answer处于哪个节点
+    private String currentNode;
+    
+    // 用户信息
+    private String user;
+    // 用户目标
+    private String userTarget;
+    // AI模型
+    private String aiModel;
     
     // 节点ID自增计数器，从1开始
     private final AtomicInteger nodeIdCounter = new AtomicInteger(0);
@@ -40,6 +44,10 @@ public class ConversationSession {
         this.userId = userId;
         this.createTime = LocalDateTime.now();
         this.updateTime = LocalDateTime.now();
+        // 设置默认值
+        this.user = userId;
+        this.userTarget = "通用对话";
+        this.aiModel = "gpt-4-turbo";
     }
     
     /**
@@ -48,13 +56,5 @@ public class ConversationSession {
      */
     public String getNextNodeId() {
         return String.valueOf(nodeIdCounter.incrementAndGet());
-    }
-    
-    /**
-     * 获取节点ID计数器
-     * @return 节点ID计数器
-     */
-    public AtomicInteger getNodeIdCounter() {
-        return nodeIdCounter;
     }
 }

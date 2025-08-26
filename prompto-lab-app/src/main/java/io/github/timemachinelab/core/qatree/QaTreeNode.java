@@ -2,6 +2,7 @@ package io.github.timemachinelab.core.qatree;
 
 import io.github.timemachinelab.core.question.BaseQuestion;
 import lombok.Data;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -10,6 +11,7 @@ import java.util.UUID;
 public class QaTreeNode {
 
     private final String id;
+    private final LocalDateTime createTime;
 
     private Map<String, QaTreeNode> children;
 
@@ -17,6 +19,7 @@ public class QaTreeNode {
 
     public QaTreeNode(BaseQuestion qa) {
         this.id = UUID.randomUUID().toString();
+        this.createTime = LocalDateTime.now();
         this.children = new HashMap<>();
         this.qa = qa;
     }
@@ -28,6 +31,7 @@ public class QaTreeNode {
      */
     public QaTreeNode(BaseQuestion qa, String nodeId) {
         this.id = nodeId;
+        this.createTime = LocalDateTime.now();
         this.children = new HashMap<>();
         this.qa = qa;
     }
