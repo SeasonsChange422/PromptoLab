@@ -1,6 +1,15 @@
 import { apiJsonRequest, apiRequest } from './apiUtils'
 import { API_CONFIG } from './apiConfig'
 
+// ApiResult类型定义
+export interface ApiResult<T = any> {
+  code: number
+  message: string
+  data: T
+  timestamp: number
+  success: boolean
+}
+
 // 表单答案项类型
 export interface FormAnswerItem {
   id: string
@@ -215,8 +224,33 @@ export const setUserProfile = async (request: {
  */
 export const closeUserInteractionSSE = (eventSource: EventSource | null) => {
   if (eventSource) {
-    eventSource.close();
-    console.log('用户交互SSE连接已关闭');
+    eventSource.close()
+    console.log('用户交互SSE连接已关闭')
+  }
+}
+
+/**
+ * 验证指纹一致性
+ * @param clientFingerprint 客户端指纹
+ * @returns 验证结果
+ */
+export const validateFingerprint = async (clientFingerprint: string): Promise<ApiResponse> => {
+  const url = `${API_BASE}/validate-fingerprint`
+
+  try {
+    const response = await apiJsonRequest<ApiResponse>(url, {
+      method: 'POST',
+      body: JSON.stringify({ fingerprint: clientFingerprint }),
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      requireAuth: false
+    })
+
+    return response
+  } catch (error) {
+    console.error('指纹验证请求失败:', error)
+    throw error
   }
 }
 

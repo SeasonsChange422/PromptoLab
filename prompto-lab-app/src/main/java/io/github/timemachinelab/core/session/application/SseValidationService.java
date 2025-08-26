@@ -71,11 +71,18 @@ public class SseValidationService {
      */
     public String validateAndGetFingerprint(HttpServletRequest request) throws SessionException {
         try {
-            // 1. 获取已存在的用户指纹（不创建新指纹）
+            // 1. 优先获取已存在的用户指纹
             UserFingerprint userFingerprint = fingerprintService.getExistingUserFingerprint(request);
+            
+            // 如果指纹不存在，尝试创建新指纹（可能是页面刷新后的情况）
             if (userFingerprint == null) {
-                log.warn("用户指纹不存在，请先建立SSE连接");
-                throw new SessionException("SSE连接验证失败: 用户指纹不存在，请先建立SSE连接");
+                log.info("用户指纹不存在，尝试创建新指纹（可能是页面刷新）");
+                userFingerprint = fingerprintService.getOrCreateUserFingerprint(request);
+                
+                if (userFingerprint == null) {
+                    log.error("无法创建用户指纹");
+                    throw new SessionException("SSE连接验证失败: 无法生成用户指纹，请重试");
+                }
             }
             
             String fingerprint = userFingerprint.getFingerprint();

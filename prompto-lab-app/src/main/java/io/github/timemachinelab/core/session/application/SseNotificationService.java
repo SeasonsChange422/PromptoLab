@@ -43,22 +43,19 @@ public class SseNotificationService {
         // 如果用户已有连接，先移除旧连接
         SseEmitter oldEmitter = sseEmitters.get(fingerprint);
         if (oldEmitter != null) {
-            oldEmitter.complete(); // 完成旧连接
+            // 静默关闭旧连接，避免向已断开的连接发送消息导致 Broken pipe 错误
+            try {
+                oldEmitter.complete(); // 直接完成旧连接，不发送关闭通知
+                log.info("旧SSE连接已静默关闭 - 用户指纹: {}", fingerprint);
+            } catch (Exception e) {
+                log.warn("关闭旧连接时出错 - 用户指纹: {}, 错误: {}", fingerprint, e.getMessage());
+            }
         }
 
         sseEmitters.put(fingerprint, emitter);
         log.info("SSE连接已注册 - 用户指纹: {}", fingerprint);
         
-        // 添加连接完成和超时的回调
-        emitter.onCompletion(() -> {
-            sseEmitters.remove(fingerprint);
-            log.info("SSE连接已完成 - 用户指纹: {}", fingerprint);
-        });
-        
-        emitter.onTimeout(() -> {
-            sseEmitters.remove(fingerprint);
-            log.info("SSE连接已超时 - 用户指纹: {}", fingerprint);
-        });
+        // 注意：回调处理由Controller层统一管理，避免重复设置
     }
 
     /**
@@ -67,8 +64,22 @@ public class SseNotificationService {
      * @param fingerprint 用户指纹
      */
     public void removeSseConnection(String fingerprint) {
-        SseEmitter emitter = sseEmitters.remove(fingerprint);
+        SseEmitter emitter = sseEmitters.get(fingerprint);
         if (emitter != null) {
+            try {
+                // 在关闭连接前通知客户端
+                emitter.send(SseEmitter.event()
+                    .name("close")
+                    .data("服务器主动关闭连接"));
+                log.info("已发送连接关闭通知 - 用户指纹: {}", fingerprint);
+            } catch (IOException e) {
+                log.warn("发送连接关闭通知失败 - 用户指纹: {}, 错误: {}", fingerprint, e.getMessage());
+            } catch (IllegalStateException e) {
+                log.warn("连接已关闭，无法发送关闭通知 - 用户指纹: {}", fingerprint);
+            }
+            
+            // 移除并完成连接
+            sseEmitters.remove(fingerprint);
             emitter.complete();
         }
         log.info("SSE连接已移除 - 用户指纹: {}", fingerprint);

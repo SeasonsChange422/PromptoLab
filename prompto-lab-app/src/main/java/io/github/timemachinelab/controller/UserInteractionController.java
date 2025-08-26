@@ -16,6 +16,7 @@ import io.github.timemachinelab.core.qatree.QaTree;
 
 import io.github.timemachinelab.core.session.domain.entity.ConversationSession;
 import io.github.timemachinelab.core.session.infrastructure.web.dto.*;
+import io.github.timemachinelab.util.QaTreeSerializeUtil;
 import io.github.timemachinelab.entity.req.RetryRequest;
 import io.github.timemachinelab.entity.resp.ApiResult;
 import io.github.timemachinelab.entity.resp.RetryResponse;
@@ -375,14 +376,24 @@ public class UserInteractionController {
                     .body(ApiResult.error("会话数据不完整"));
             }
 
-            // 4. 组装返回数据
+            // 4. 序列化QaTree为前端期望的格式
+            String serializedQaTree;
+            try {
+                serializedQaTree = QaTreeSerializeUtil.serialize(qaTree);
+            } catch (Exception e) {
+                log.error("序列化QaTree失败 - sessionId: {}", sessionId, e);
+                return ResponseEntity.internalServerError()
+                    .body(ApiResult.error("序列化会话数据失败: " + e.getMessage()));
+            }
+            
+            // 5. 组装返回数据
             ConversationHistoryResponse response = new ConversationHistoryResponse(
                 session.getSessionId(),
                 session.getUserId(),
                 session.getCurrentNode(),
                 session.getCreateTime(),
                 session.getUpdateTime(),
-                qaTree
+                serializedQaTree
             );
 
             log.info("成功获取对话历史 - sessionId: {}, 节点数量: {}", sessionId, qaTree.getNodeCount());
@@ -410,5 +421,60 @@ public class UserInteractionController {
     @PostMapping("/set-user-profile")
     public ResponseEntity<Boolean> setUserProfile(@RequestBody SetUserProfileRequest request) {
         return ResponseEntity.ok(sessionManagementService.setUserProfile(request.getSessionId(), request.getUserId(), request.getUserProfile()));
+    }
+
+    /**
+     * 验证指纹一致性
+     * 检查客户端提供的指纹是否与服务端生成的指纹一致
+     * 如果不一致，生成新的指纹替代客户端指纹，并返回空的sessionIdList避免水平越权
+     * 
+     * @param request HTTP请求对象
+     * @return 验证结果，包含是否一致和正确的指纹
+     */
+    @PostMapping("/validate-fingerprint")
+    public ResponseEntity<ApiResult<Map<String, Object>>> validateFingerprint(
+            @RequestBody Map<String, String> requestBody,
+            HttpServletRequest request) {
+        
+        try {
+            // 从请求体中获取客户端指纹
+            String clientFingerprint = requestBody.get("fingerprint");
+            
+            // 生成服务端指纹
+            UserFingerprint serverFingerprint = fingerprintService.getOrCreateUserFingerprint(request);
+            String serverFingerprintId = serverFingerprint.getFingerprint();
+            
+            // 比较指纹
+            boolean isConsistent = serverFingerprintId.equals(clientFingerprint);
+            
+            Map<String, Object> result = new ConcurrentHashMap<>();
+            result.put("isConsistent", isConsistent);
+            result.put("serverFingerprint", serverFingerprintId);
+            result.put("clientFingerprint", clientFingerprint);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            if (!isConsistent) {
+                log.warn("指纹不一致 - 客户端: {}, 服务端: {}, 生成新指纹替代", clientFingerprint, serverFingerprintId);
+                result.put("message", "指纹不一致，已生成新指纹");
+                result.put("newFingerprint", serverFingerprintId);
+                // 指纹不匹配时返回空的sessionIdList，避免水平越权
+                result.put("sessionIdList", List.of());
+                result.put("requireUpdate", true);
+            } else {
+                log.debug("指纹验证通过 - 指纹: {}", serverFingerprintId);
+                result.put("message", "指纹验证通过");
+                // 指纹匹配时返回对应的sessionIdList
+                List<String> sessionIds = sessionManagementService.getUserSessionIds(serverFingerprintId);
+                result.put("sessionIdList", sessionIds);
+                result.put("requireUpdate", false);
+            }
+            
+            return ResponseEntity.ok(ApiResult.success(result));
+            
+        } catch (Exception e) {
+            log.error("指纹验证失败: {}", e.getMessage(), e);
+            return ResponseEntity.internalServerError()
+                .body(ApiResult.error("指纹验证失败: " + e.getMessage()));
+        }
     }
 }

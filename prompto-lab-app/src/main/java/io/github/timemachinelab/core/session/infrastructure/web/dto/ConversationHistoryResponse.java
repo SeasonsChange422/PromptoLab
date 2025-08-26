@@ -1,6 +1,5 @@
 package io.github.timemachinelab.core.session.infrastructure.web.dto;
 
-import io.github.timemachinelab.core.qatree.QaTree;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -17,5 +16,5 @@ public class ConversationHistoryResponse {
     private String currentNode;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
-    private QaTree qaTree;
+    private String qaTree;
 }

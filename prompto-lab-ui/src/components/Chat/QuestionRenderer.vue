@@ -7,8 +7,32 @@
       </div>
     </div>
 
+    <!-- 对话历史显示 -->
+    <div v-if="!currentQuestion && conversationTree && conversationTree.size > 0" class="conversation-history">
+      <div class="history-header">
+        <h3>对话历史</h3>
+        <p>点击任意节点继续对话</p>
+      </div>
+      <div class="conversation-nodes">
+        <div 
+          v-for="[nodeId, node] in conversationTree" 
+          :key="nodeId"
+          @click="emit('nodeSelected', nodeId)"
+          class="conversation-node"
+          :class="{ 
+            'user-node': node.type === 'user', 
+            'assistant-node': node.type === 'assistant',
+            'active-node': nodeId === currentNodeId
+          }"
+        >
+          <div class="node-content">{{ node.content }}</div>
+          <div class="node-timestamp">{{ formatTimestamp(node.timestamp) }}</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 初始状态：大输入框和快捷按钮 -->
-    <div v-if="!currentQuestion" class="initial-state">
+    <div v-else-if="!currentQuestion" class="initial-state">
       <div class="welcome-section">
         <div class="welcome-icon">
           <div class="icon-glow"></div>
@@ -339,11 +363,23 @@ interface FormQuestion extends BaseQuestion {
 
 type Question = InputQuestion | SingleChoiceQuestion | MultipleChoiceQuestion | FormQuestion
 
+interface ConversationNode {
+  id: string
+  content: string
+  type: 'user' | 'assistant'
+  timestamp: Date
+  parentId?: string
+  children: string[]
+  isActive: boolean
+}
+
 interface Props {
   currentQuestion?: Question | null
   isLoading?: boolean
   sessionId?: string | null
   userId?: string
+  conversationTree?: Map<string, ConversationNode>
+  currentNodeId?: string
 }
 
 const props = defineProps<Props>()
@@ -352,6 +388,7 @@ const emit = defineEmits<{
   submitAnswer: [answer: any]
   retryQuestion: [reason: string]
   generatePrompt: [answer: any]
+  nodeSelected: [nodeId: string]
 }>()
 
 // 响应式数据
@@ -489,6 +526,26 @@ const getQuestionIcon = (type: string) => {
     form: '📋'
   }
   return icons[type as keyof typeof icons] || '❓'
+}
+
+const formatTimestamp = (timestamp: Date) => {
+  const now = new Date()
+  const diff = now.getTime() - timestamp.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+  
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes}分钟前`
+  if (hours < 24) return `${hours}小时前`
+  if (days < 7) return `${days}天前`
+  
+  return timestamp.toLocaleDateString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
 const handleFormFieldChange = (fieldId: string, value: any) => {
@@ -2175,6 +2232,84 @@ defineExpose({
   background: rgba(128, 128, 128, 0.1);
   border-color: rgba(128, 128, 128, 0.3);
   color: #cccccc;
+}
+
+/* 对话历史样式 */
+.conversation-history {
+  padding: 40px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.history-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.history-header h3 {
+  color: #e8e8e8;
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+}
+
+.history-header p {
+  color: #999;
+  font-size: 14px;
+  margin: 0;
+}
+
+.conversation-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.conversation-node {
+  background: rgba(20, 20, 20, 0.8);
+  border: 1px solid rgba(255, 165, 0, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.conversation-node:hover {
+  background: rgba(30, 30, 30, 0.9);
+  border-color: rgba(255, 165, 0, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 165, 0, 0.1);
+}
+
+.conversation-node.active-node {
+  background: rgba(255, 165, 0, 0.1);
+  border-color: rgba(255, 165, 0, 0.6);
+  box-shadow: 0 0 0 2px rgba(255, 165, 0, 0.2);
+}
+
+.conversation-node.user-node {
+  border-left: 4px solid #4CAF50;
+}
+
+.conversation-node.assistant-node {
+  border-left: 4px solid #2196F3;
+}
+
+.node-content {
+  color: #e8e8e8;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  word-wrap: break-word;
+}
+
+.node-timestamp {
+  color: #666;
+  font-size: 12px;
+  text-align: right;
 }
 
 .cancel-btn:hover {
