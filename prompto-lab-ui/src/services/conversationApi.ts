@@ -230,12 +230,10 @@ export const processAnswer = async (request: UnifiedAnswerRequest): Promise<void
  * 建立用户交互SSE连接
  * 对接后端的用户交互SSE接口（基于用户指纹）
  */
-export const connectUserInteractionSSE = (onMessage: (response: any) => void, onError?: (error: Event) => void): EventSource => {
+export const connectUserInteractionSSE = (onMessage: (response: any) => void, onError?: (error: Event) => void, onClose?: () => void): EventSource => {
   // 后端SSE接口不需要参数，会自动通过HttpServletRequest生成或获取用户指纹
   const url = `${USER_INTERACTION_BASE}/sse`
   const eventSource = new EventSource(url)
-
-
 
   // 监听连接建立事件
   eventSource.addEventListener('connected', (event: MessageEvent) => {
@@ -280,11 +278,29 @@ export const connectUserInteractionSSE = (onMessage: (response: any) => void, on
     }
   })
 
+  // 监听连接关闭事件
+  eventSource.addEventListener('close', (event: MessageEvent) => {
+    console.log('SSE连接被服务器主动关闭')
+    if (onClose) {
+      onClose()
+    }
+  })
+
   eventSource.onerror = (error: Event) => {
     console.error('用户交互SSE连接错误:', error)
     if (onError) {
       onError(error)
     }
+  }
+
+  // 监听原生连接关闭事件（当EventSource状态变为CLOSED时）
+  const originalClose = eventSource.close.bind(eventSource)
+  eventSource.close = () => {
+    console.log('SSE连接关闭')
+    if (onClose) {
+      onClose()
+    }
+    originalClose()
   }
 
   return eventSource

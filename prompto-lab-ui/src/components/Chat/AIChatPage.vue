@@ -12,55 +12,23 @@
 
     <!-- 左侧栏 -->
     <div class="left-sidebar" :class="{ collapsed: !sidebarExpanded }">
-      <div class="sidebar-content">
-        <!-- 可展开/收缩的头部按钮 -->
-        <div class="sidebar-toggle" @click="toggleSidebar">
-          <div class="toggle-icon">
-            <span class="icon">{{ sidebarExpanded ? '◀' : '▶' }}</span>
-          </div>
-          <div class="toggle-text" v-if="sidebarExpanded">
-            <h3>会话列表</h3>
-            <p>点击收起</p>
-          </div>
-        </div>
-        <!-- 会话列表 -->
-        <div class="session-list" v-if="sidebarExpanded">
-          <div class="session-list-header">
-            <h4>最近对话</h4>
-            <button class="new-chat-btn" @click="startNewChat">
-              <span class="plus-icon">+</span>
-              新对话
-            </button>
-          </div>
-          <div class="session-items">
-            <div
-              v-for="sessionItem in sessionList"
-              :key="sessionItem.id"
-              class="session-item"
-              :class="{ active: sessionItem.id === currentSessionId }"
-              @click="switchToSession(sessionItem.id)"
-            >
-              <div class="session-content">
-                <div class="session-title">{{ sessionItem.title }}</div>
-                <div class="session-preview">{{ sessionItem.lastMessage }}</div>
-                <div class="session-time">{{ formatTime(sessionItem.updatedAt) }}</div>
-              </div>
-              <div class="session-actions">
-                <button class="delete-btn" @click.stop="deleteSession(sessionItem.id)">
-                  <span>×</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <ConversationHistory
+        :session-list="sessionList"
+        :current-session-id="currentSessionId"
+        :sidebar-expanded="sidebarExpanded"
+        @start-new-chat="startNewChat"
+        @switch-to-session="switchToSession"
+        @delete-session="deleteSession"
+        @toggle-sidebar="toggleSidebar"
+      />
     </div>
 
     <!-- 中间问答主页面 -->
     <div class="main-content" :style="{ width: mainContentWidth + 'px' }">
       <QuestionRenderer ref="questionRendererRef" :current-question="currentQuestion" :is-loading="isLoading"
-        :session-id="sessionId" :user-id="userId" @send-message="handleSendMessage"
-        @submit-answer="handleSubmitAnswer" @retry-question="handleRetryQuestion" @generate-prompt="handleGeneratePrompt" />
+        :session-id="sessionId" :user-id="userId" :conversation-tree="conversationTree" :current-node-id="currentNodeId"
+        @send-message="handleSendMessage" @submit-answer="handleSubmitAnswer" @retry-question="handleRetryQuestion" 
+        @generate-prompt="handleGeneratePrompt" @node-selected="handleNodeSelected" />
     </div>
 
     <!-- 可拖拽的分隔条 -->
@@ -84,12 +52,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, readonly, nextTick } from 'vue'
 import QuestionRenderer from './QuestionRenderer.vue'
 import MindMapTree from './MindMapTree.vue'
+import ConversationHistory from './ConversationHistory.vue'
 import { startConversation, sendMessage, sendUserMessage, connectSSE, closeSSE, processAnswer, connectUserInteractionSSE, retryQuestion, fetchSessionList, type MessageRequest, type MessageResponse, type ConversationSession, type UnifiedAnswerRequest, type FormAnswerItem, type RetryRequest, type SessionItem } from '@/services/conversationApi'
-import { generatePrompt } from '@/services/userInteractionApi'
+import { generatePrompt, getConversationHistory, validateFingerprint } from '@/services/userInteractionApi'
 import { toast } from '@/utils/toast'
+import sseConnectionManager from '@/services/sseConnectionManager'
 
 interface Message {
   id: string
@@ -190,8 +160,11 @@ const saveFingerprint = (fp: string) => {
 // SSE连接管理
 const connectionTimeout = ref<NodeJS.Timeout | null>(null)
 const activityTimeout = ref<NodeJS.Timeout | null>(null)
+const heartbeatInterval = ref<NodeJS.Timeout | null>(null)
 const ACTIVITY_TIMEOUT = 5 * 60 * 1000 // 5分钟不活跃超时
+const HEARTBEAT_INTERVAL = 30 * 1000 // 30秒心跳检测间隔
 const lastActivityTime = ref<number>(Date.now())
+const lastHeartbeatTime = ref<number>(Date.now())
 
 // 对话树存储所有节点
 const conversationTree = ref<Map<string, ConversationNode>>(new Map())
@@ -250,14 +223,18 @@ const ensureUniqueConnection = () => {
     activityTimeout.value = null
   }
 
-  // 重置重连尝试次数
-  retryCount = MAX_RETRY_COUNT
+  // 停止心跳检测
+  stopHeartbeat()
+  
+  // 重置重连状态
+  resetRetryCount()
 }
 
 // 更新活跃时间
 const updateActivity = () => {
-
-  lastActivityTime.value = Date.now()
+  const now = Date.now()
+  lastActivityTime.value = now
+  lastHeartbeatTime.value = now
 
   // 重置活跃超时定时器
   if (activityTimeout.value) {
@@ -265,7 +242,6 @@ const updateActivity = () => {
   }
 
   activityTimeout.value = setTimeout(() => {
-
     closeConnection()
     toast.info({
       title: '连接已关闭',
@@ -291,31 +267,78 @@ const closeConnection = () => {
     clearTimeout(activityTimeout.value)
     activityTimeout.value = null
   }
+  
+  // 停止心跳检测
+  stopHeartbeat()
+  
+  // 清理全局连接管理器的连接信息
+  sseConnectionManager.clearConnection()
+}
+
+// 连接建立锁，防止并发建立连接
+// 建立新的SSE连接
+const establishNewConnection = async () => {
+  // 确保连接唯一性
+  ensureUniqueConnection()
+
+  // 建立SSE连接，后端会自动处理指纹生成和会话管理
+  eventSource.value = connectUserInteractionSSE(
+    handleSSEMessage,
+    handleSSEError,
+    handleSSEClose
+  )
+
+  // 启动活跃监控
+  updateActivity()
+
+  console.log('SSE连接已建立，等待后端返回指纹和会话信息...')
 }
 
 // 初始化会话
 const initializeSession = async () => {
   if (isInitializing.value) return
 
+  // 优先检查全局连接管理器中是否已有活跃连接
+  if (sseConnectionManager.hasActiveConnection()) {
+    const connectionInfo = sseConnectionManager.getConnectionInfo()
+    if (connectionInfo && connectionInfo.eventSource) {
+      // 验证连接是否真正可用
+      try {
+        const testEventSource = connectionInfo.eventSource
+        if (testEventSource.readyState === EventSource.OPEN && testEventSource.url) {
+          console.log('从全局连接管理器恢复SSE连接:', connectionInfo.connectionId)
+          eventSource.value = connectionInfo.eventSource
+          fingerprint.value = connectionInfo.fingerprint
+          isConnected.value = connectionInfo.isConnected
+          
+          // 更新活跃时间
+          sseConnectionManager.updateActivity()
+          
+          console.log('SSE连接已从全局管理器恢复，跳过初始化')
+          return
+        } else {
+          console.log('全局管理器中的连接已失效，清理并重新建立')
+          sseConnectionManager.clearConnection()
+        }
+      } catch (error) {
+        console.log('验证全局连接时出错，清理并重新建立:', error)
+        sseConnectionManager.clearConnection()
+      }
+    }
+  }
+
+  // 如果已有有效的SSE连接，跳过初始化
+  if (eventSource.value && eventSource.value.readyState === EventSource.OPEN && isConnected.value) {
+    console.log('SSE连接已存在且有效，跳过初始化')
+    return
+  }
+
   isInitializing.value = true
 
   try {
-    // 确保连接唯一性
-    ensureUniqueConnection()
-
-    // 生成用户ID（如果没有的话）
-    const userId = 'demo-user-' + Date.now() // 临时用户ID
-
-    // 建立SSE连接（不传sessionId，让后端创建新会话）
-    eventSource.value = connectUserInteractionSSE(
-      handleSSEMessage,
-      handleSSEError
-    )
-
-    // 启动活跃监控
-    updateActivity()
-
-    // console.log('SSE连接已建立，等待后端返回会话信息...')
+    // 直接建立SSE连接，后端会自动处理指纹生成或获取
+    console.log('建立SSE连接，后端将自动处理指纹')
+    await establishNewConnection()
 
   } catch (error: any) {
     console.error('初始化会话失败:', error)
@@ -329,6 +352,7 @@ const initializeSession = async () => {
     isInitializing.value = false
   }
 }
+
 
 // 处理SSE消息
 const handleSSEMessage = (response: any) => {
@@ -398,12 +422,31 @@ const handleSSEMessage = (response: any) => {
 const handleConnectionMessage = (response: any): boolean => {
   if (response.type === 'connected' || response.fingerprint || response.fingerprintId) {
     console.log('收到SSE连接建立消息:', response)
+    
+    // 连接成功，重置重连计数器并启动心跳检测
+    resetRetryCount()
+    isConnected.value = true
+    startHeartbeat()
+    
+    // 更新全局连接管理器的连接状态
+    sseConnectionManager.updateConnectionStatus(true)
 
     // 处理SSE连接建立时的指纹和sessionList
-    const fingerprint = response.fingerprintId || response.fingerprint
-    if (fingerprint) {
-      saveFingerprint(fingerprint)
-      console.log('已保存指纹:', fingerprint)
+    const fingerprintValue = response.fingerprintId || response.fingerprint
+    if (fingerprintValue) {
+      saveFingerprint(fingerprintValue)
+      fingerprint.value = fingerprintValue
+      console.log('已保存指纹:', fingerprintValue)
+      
+      // 将连接注册到全局管理器
+      if (eventSource.value) {
+        const connectionId = sseConnectionManager.registerConnection(
+          eventSource.value,
+          fingerprintValue,
+          true // 连接已建立
+        )
+        console.log('SSE连接已注册到全局管理器:', connectionId)
+      }
     }
 
     // 处理新的会话详细信息格式
@@ -681,9 +724,102 @@ const handleOtherMessages = (response: any) => {
   }
 }
 
-// 重连尝试次数
-const MAX_RETRY_COUNT = 3
-let retryCount = MAX_RETRY_COUNT
+// SSE重连配置 - 可配置的重连策略
+interface ReconnectConfig {
+  maxRetryCount: number
+  initialRetryDelay: number
+  maxRetryDelay: number
+  backoffMultiplier: number
+  enableHeartbeat: boolean
+  heartbeatInterval: number
+}
+
+// 默认重连配置
+const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
+  maxRetryCount: 5,
+  initialRetryDelay: 1000, // 初始重连延迟1秒
+  maxRetryDelay: 30000, // 最大重连延迟30秒
+  backoffMultiplier: 2, // 指数退避倍数
+  enableHeartbeat: true, // 启用心跳检测
+  heartbeatInterval: 30000 // 30秒心跳检测间隔
+}
+
+// 当前重连配置（可通过外部配置覆盖）
+const reconnectConfig = ref<ReconnectConfig>({ ...DEFAULT_RECONNECT_CONFIG })
+
+// 重连状态
+let retryCount = 0
+let retryTimeout: NodeJS.Timeout | null = null
+
+// 兼容性常量（保持向后兼容）
+const MAX_RETRY_COUNT = reconnectConfig.value.maxRetryCount
+const INITIAL_RETRY_DELAY = reconnectConfig.value.initialRetryDelay
+const MAX_RETRY_DELAY = reconnectConfig.value.maxRetryDelay
+
+// 计算重连延迟（指数退避策略）
+const calculateRetryDelay = (attemptCount: number): number => {
+  const delay = reconnectConfig.value.initialRetryDelay * Math.pow(reconnectConfig.value.backoffMultiplier, attemptCount)
+  return Math.min(delay, reconnectConfig.value.maxRetryDelay)
+}
+
+// 配置重连策略
+const configureReconnectStrategy = (config: Partial<ReconnectConfig>) => {
+  reconnectConfig.value = { ...reconnectConfig.value, ...config }
+  console.log('重连策略已更新:', reconnectConfig.value)
+}
+
+// 获取当前重连配置
+const getReconnectConfig = (): ReconnectConfig => {
+  return { ...reconnectConfig.value }
+}
+
+// 重置重连计数器
+const resetRetryCount = () => {
+  retryCount = 0
+  if (retryTimeout) {
+    clearTimeout(retryTimeout)
+    retryTimeout = null
+  }
+}
+
+// 启动心跳检测
+const startHeartbeat = () => {
+  // 检查是否启用心跳检测
+  if (!reconnectConfig.value.enableHeartbeat) {
+    console.log('心跳检测已禁用')
+    return
+  }
+  
+  if (heartbeatInterval.value) {
+    clearInterval(heartbeatInterval.value)
+  }
+  
+  heartbeatInterval.value = setInterval(() => {
+    const now = Date.now()
+    const timeSinceLastActivity = now - lastActivityTime.value
+    const heartbeatIntervalMs = reconnectConfig.value.heartbeatInterval
+    
+    // 如果连接状态为已连接但长时间没有活动，检查连接状态
+    if (isConnected.value && timeSinceLastActivity > heartbeatIntervalMs) {
+      // 检查EventSource连接状态
+      if (eventSource.value && eventSource.value.readyState !== EventSource.OPEN) {
+        console.warn('检测到SSE连接异常，触发重连')
+        handleSSEError(new Event('heartbeat_check_failed'))
+      }
+    }
+    
+    lastHeartbeatTime.value = now
+  }, reconnectConfig.value.heartbeatInterval)
+}
+
+// 停止心跳检测
+const stopHeartbeat = () => {
+  if (heartbeatInterval.value) {
+    clearInterval(heartbeatInterval.value)
+    heartbeatInterval.value = null
+  }
+}
+
 // 处理SSE错误
 const handleSSEError = (error: Event) => {
   console.error('SSE连接错误:', error)
@@ -695,36 +831,79 @@ const handleSSEError = (error: Event) => {
     activityTimeout.value = null
   }
 
+  // 如果正在初始化或已经有连接，不进行重连
+  if (isInitializing.value || eventSource.value) {
+    console.log('正在初始化或已有连接，跳过重连')
+    return
+  }
+
+  // 如果已达到最大重连次数，停止重连
+  if (retryCount >= reconnectConfig.value.maxRetryCount) {
+    console.error(`已达到最大重连次数(${reconnectConfig.value.maxRetryCount})，停止重连`)
+    toast.error({
+      title: '连接失败',
+      message: '无法连接到服务器，请刷新页面重试',
+      duration: 5000
+    })
+    return
+  }
+
+  retryCount++
+  const retryDelay = calculateRetryDelay(retryCount - 1)
+  
+  console.log(`第${retryCount}次重连尝试，延迟${retryDelay}ms`)
+  
   toast.error({
     title: '连接中断',
-    message: '与AI助手的连接已中断，正在尝试重连...',
-    duration: 3000
+    message: `连接已中断，${retryDelay/1000}秒后尝试第${retryCount}次重连...`,
+    duration: Math.min(retryDelay, 3000)
   })
 
-  // 尝试重连（如果有会话信息）
-  if (session.value && !isInitializing.value) {
-    setTimeout(() => {
-      if (!isConnected.value && !isInitializing.value) {
-        // console.log('尝试重连到现有会话:', session.value?.sessionId)
-        ensureUniqueConnection() // 确保连接唯一性
+  // 使用指数退避策略进行重连
+  retryTimeout = setTimeout(() => {
+    if (!isConnected.value && !isInitializing.value && !eventSource.value) {
+      console.log(`开始第${retryCount}次重连尝试`)
+      
+      // 重新初始化会话（包含指纹验证）
+      initializeSession()
+    }
+  }, retryDelay)
+}
 
-        eventSource.value = connectUserInteractionSSE(
-          handleSSEMessage,
-          handleSSEError
-        )
-
-        // 重新启动活跃监控
-        updateActivity()
-      }
-    }, 3000)
-  } else if (!isInitializing.value) {
-    // 如果没有会话信息，也尝试重新初始化
-    setTimeout(() => {
-      if (!isConnected.value && !isInitializing.value) {
-        initializeSession()
-      }
-    }, 3000)
+// 处理SSE连接关闭
+const handleSSEClose = () => {
+  console.log('SSE连接已关闭，清理客户端状态')
+  
+  // 更新连接状态
+  isConnected.value = false
+  
+  // 清理EventSource引用
+  eventSource.value = null
+  
+  // 清理定时器
+  if (activityTimeout.value) {
+    clearTimeout(activityTimeout.value)
+    activityTimeout.value = null
   }
+  if (connectionTimeout.value) {
+    clearTimeout(connectionTimeout.value)
+    connectionTimeout.value = null
+  }
+  
+  // 停止心跳检测
+  stopHeartbeat()
+  
+  // 重置重连状态
+  resetRetryCount()
+  
+  // 清理全局连接管理器的连接信息
+  sseConnectionManager.clearConnection()
+  
+  // 不清理指纹，保持用户身份标识
+  // localStorage.removeItem(FINGERPRINT_KEY)
+  // fingerprint.value = null
+  
+  console.log('SSE连接关闭，保持指纹不变')
 }
 
 // 添加AI消息到对话树
@@ -863,14 +1042,148 @@ const startNewChat = () => {
   toast.success('已开始新对话')
 }
 
-const switchToSession = (sessionId: string) => {
+const switchToSession = async (sessionId: string) => {
   if (currentSessionId.value === sessionId) return
 
-  currentSessionId.value = sessionId
-  // 保存当前会话ID到localStorage
-  saveCurrentSessionId(sessionId)
-  // 这里后续会调用API加载会话历史
-  toast.info(`切换到会话: ${sessionId}`)
+  try {
+    // 显示加载状态
+    setLoading(true)
+    
+    // 确保SSE连接已建立
+    if (!isConnected.value || !eventSource.value || eventSource.value.readyState !== EventSource.OPEN) {
+      console.log('SSE连接未建立，先建立连接再切换会话')
+      toast.info({
+        title: '正在连接',
+        message: '正在建立连接，请稍候...',
+        duration: 2000
+      })
+      
+      // 尝试建立连接
+      await initializeSession()
+      
+      // 等待连接建立（最多等待5秒）
+      let waitCount = 0
+      while ((!isConnected.value || !eventSource.value || eventSource.value.readyState !== EventSource.OPEN) && waitCount < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        waitCount++
+      }
+      
+      // 如果连接仍未建立，提示用户
+      if (!isConnected.value || !eventSource.value || eventSource.value.readyState !== EventSource.OPEN) {
+        throw new Error('无法建立SSE连接，请刷新页面重试')
+      }
+      
+      console.log('SSE连接已建立，继续切换会话')
+    }
+    
+    // 调用API获取会话历史
+    const historyResponse = await getConversationHistory(sessionId)
+    
+    if (historyResponse && historyResponse.data) {
+      const historyData = historyResponse.data
+      
+      // 更新当前会话ID
+      currentSessionId.value = sessionId
+      saveCurrentSessionId(sessionId)
+      
+      // 清空当前对话树和问题状态
+      conversationTree.value.clear()
+      currentQuestion.value = null // 清空当前问题，显示对话历史而不是快速输入
+      
+      // 如果有qaTree数据，重建对话树
+      if (historyData.qaTree) {
+        try {
+          // 解析qaTree数据 - 后端返回的是JsonNode数组的JSON字符串
+          let qaTreeNodes = historyData.qaTree
+          if (typeof qaTreeNodes === 'string') {
+            qaTreeNodes = JSON.parse(qaTreeNodes)
+          }
+          
+          // 重建对话树 - qaTreeNodes是JsonNode数组格式
+          if (Array.isArray(qaTreeNodes)) {
+            qaTreeNodes.forEach((jsonNode: any) => {
+              if (jsonNode && jsonNode.nodeId) {
+                const conversationNode: ConversationNode = {
+                  id: jsonNode.nodeId,
+                  content: jsonNode.question || '',
+                  type: jsonNode.parentId ? 'user' : 'assistant', // 根节点为assistant，其他为user
+                  timestamp: new Date(),
+                  parentId: jsonNode.parentId,
+                  children: [],
+                  isActive: false
+                }
+                conversationTree.value.set(jsonNode.nodeId, conversationNode)
+                
+                // 如果有答案，添加对应的回答节点
+                if (jsonNode.answer && jsonNode.answer.trim()) {
+                  const answerNode: ConversationNode = {
+                    id: jsonNode.nodeId + '_answer',
+                    content: jsonNode.answer,
+                    type: 'assistant',
+                    timestamp: new Date(),
+                    parentId: jsonNode.nodeId,
+                    children: [],
+                    isActive: false
+                  }
+                  conversationTree.value.set(answerNode.id, answerNode)
+                  conversationNode.children.push(answerNode.id)
+                }
+              }
+            })
+            
+            // 设置当前节点ID
+            if (historyData.currentNode) {
+              currentNodeId.value = historyData.currentNode
+            }
+            
+            console.log('已加载会话历史:', {
+              sessionId,
+              nodeCount: conversationTree.value.size,
+              currentNodeId: currentNodeId.value
+            })
+            
+            toast.success({
+              title: '会话已切换',
+              message: `已加载会话历史 (${conversationTree.value.size} 个节点)`,
+              duration: 2000
+            })
+          } else {
+            console.warn('qaTree数据格式不正确，期望数组格式:', qaTreeNodes)
+            toast.warning({
+              title: '历史记录为空',
+              message: '该会话暂无历史记录',
+              duration: 2000
+            })
+          }
+        } catch (parseError) {
+          console.error('解析qaTree数据失败:', parseError)
+          toast.error({
+            title: '数据解析失败',
+            message: '无法解析会话历史数据',
+            duration: 3000
+          })
+        }
+      } else {
+        console.log('该会话没有qaTree数据')
+        toast.info({
+          title: '会话已切换',
+          message: '该会话暂无历史记录',
+          duration: 2000
+        })
+      }
+    } else {
+      throw new Error('获取会话历史失败：响应数据为空')
+    }
+  } catch (error) {
+    console.error('切换会话失败:', error)
+    toast.error({
+      title: '切换失败',
+      message: '无法加载会话历史，请重试',
+      duration: 3000
+    })
+  } finally {
+    setLoading(false)
+  }
 }
 
 const deleteSession = (sessionId: string) => {
@@ -886,59 +1199,7 @@ const deleteSession = (sessionId: string) => {
   }
 }
 
-const formatTime = (date: Date | string) => {
-  // 如果传入的是字符串，尝试解析为Date对象
-  let dateObj: Date;
-  if (typeof date === 'string') {
-    // 处理后端返回的时间格式
-    if (date.includes('.')) {
-      // 处理带纳秒的时间格式，如 "2025-08-26 02:45:50.591607900"
-      const parts = date.split('.');
-      if (parts.length > 1) {
-        // 只取前3位小数（毫秒）
-        const milliseconds = parts[1].substring(0, 3);
-        // 将空格替换为T以符合ISO格式
-        const isoString = parts[0].replace(' ', 'T') + '.' + milliseconds;
-        date = isoString;
-      }
-    } else if (date.includes(' ')) {
-      // 处理 "2025-08-26 02:45:55" 格式
-      date = date.replace(' ', 'T');
-    }
-    dateObj = new Date(date);
-  } else {
-    dateObj = date;
-  }
 
-  // 检查日期是否有效
-  if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
-    return '未知时间';
-  }
-
-  const now = new Date();
-  const diff = now.getTime() - dateObj.getTime();
-
-  // 检查差值是否有效
-  if (isNaN(diff)) {
-    return '未知时间';
-  }
-
-  const minutes = Math.floor(diff / (1000 * 60));
-  const hours = Math.floor(diff / (1000 * 60 * 60));
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-  if (minutes < 1) {
-    return '刚刚';
-  } else if (minutes < 60) {
-    return `${minutes}分钟前`;
-  } else if (hours < 24) {
-    return `${hours}小时前`;
-  } else if (days < 7) {
-    return `${days}天前`;
-  } else {
-    return dateObj.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-  }
-}
 
 // 生命周期
 onMounted(() => {
@@ -967,7 +1228,78 @@ onMounted(() => {
     console.log('从localStorage加载当前会话ID:', currentSessionId.value)
   }
 
+  // 页面加载时检查并清理可能失效的连接
+  if (sseConnectionManager.hasActiveConnection()) {
+    const connectionInfo = sseConnectionManager.getConnectionInfo()
+    if (connectionInfo?.eventSource) {
+      try {
+        // 检查连接是否在页面刷新后仍然有效
+        if (connectionInfo.eventSource.readyState !== EventSource.OPEN) {
+          console.log('页面加载时发现连接已失效，清理连接信息')
+          sseConnectionManager.clearConnection()
+        }
+      } catch (error) {
+        console.log('页面加载时检查连接状态出错，清理连接信息:', error)
+        sseConnectionManager.clearConnection()
+      }
+    }
+  }
+
+  // 页面可见性变化处理函数
+  const handleVisibilityChange = () => {
+    if (!document.hidden) {
+      // 页面变为可见时，检查连接状态
+      if (sseConnectionManager.hasActiveConnection()) {
+        const connectionInfo = sseConnectionManager.getConnectionInfo()
+        if (connectionInfo?.eventSource) {
+          try {
+            if (connectionInfo.eventSource.readyState !== EventSource.OPEN) {
+              console.log('页面可见时发现连接已失效，清理连接信息')
+              sseConnectionManager.clearConnection()
+              // 如果连接失效，尝试重新初始化
+              if (!isInitializing.value) {
+                initializeSession()
+              }
+            }
+          } catch (error) {
+            console.log('页面可见时检查连接状态出错，清理连接信息:', error)
+            sseConnectionManager.clearConnection()
+          }
+        }
+      }
+    }
+  }
+  
+  // 添加页面可见性变化监听器
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+
+  // 添加页面关闭时的连接清理
+  const handleBeforeUnload = () => {
+    console.log('页面即将关闭，清理SSE连接')
+    // 立即关闭SSE连接
+    if (eventSource.value) {
+      eventSource.value.close()
+      eventSource.value = null
+    }
+    // 清理全局连接管理器
+    sseConnectionManager.clearConnection()
+    // 清理所有定时器
+    if (activityTimeout.value) {
+      clearTimeout(activityTimeout.value)
+      activityTimeout.value = null
+    }
+    if (connectionTimeout.value) {
+      clearTimeout(connectionTimeout.value)
+      connectionTimeout.value = null
+    }
+    stopHeartbeat()
+  }
+  
+  window.addEventListener('beforeunload', handleBeforeUnload)
+
+  // 初始化会话
   initializeSession()
+  
   updateContainerWidth()
   window.addEventListener('resize', updateContainerWidth)
 })
@@ -978,8 +1310,13 @@ onUnmounted(() => {
     closeSSE(eventSource.value)
     eventSource.value = null
   }
+  
+  // 清理全局连接管理器的连接信息
+  sseConnectionManager.clearConnection()
 
   window.removeEventListener('resize', updateContainerWidth)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopResize() // 确保清理事件监听器
 })
 
@@ -1506,6 +1843,22 @@ const handleBranchDeleted = (nodeId: string) => {
     currentNodeId.value = newCurrentId || rootNodeId
   }
 }
+
+// 导出给父组件使用的方法
+defineExpose({
+  sendMessage: handleSendMessage,
+  // SSE重连策略配置方法
+  configureReconnectStrategy,
+  getReconnectConfig,
+  // 连接状态和控制方法
+  isConnected: readonly(isConnected),
+  reconnectManually: () => {
+    if (!isConnected.value) {
+      resetRetryCount()
+      initializeSession()
+    }
+  }
+})
 </script>
 
 <style scoped>
@@ -1645,236 +1998,7 @@ const handleBranchDeleted = (nodeId: string) => {
   width: 60px;
 }
 
-/* 会话列表样式 */
-.session-list {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 
-.session-list-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.session-list-header h4 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: #d4af37;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.new-chat-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.1), rgba(244, 208, 63, 0.05));
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  border-radius: 8px;
-  color: #d4af37;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.new-chat-btn:hover {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.2), rgba(244, 208, 63, 0.1));
-  border-color: rgba(212, 175, 55, 0.5);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.2);
-}
-
-.plus-icon {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.session-items {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.session-item {
-  display: flex;
-  align-items: center;
-  padding: 12px;
-  background: rgba(15, 15, 15, 0.6);
-  border: 1px solid rgba(212, 175, 55, 0.1);
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.session-item:hover {
-  background: rgba(15, 15, 15, 0.8);
-  border-color: rgba(212, 175, 55, 0.3);
-  transform: translateX(2px);
-}
-
-.session-item.active {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.15), rgba(244, 208, 63, 0.08));
-  border-color: rgba(212, 175, 55, 0.4);
-  box-shadow: 0 4px 16px rgba(212, 175, 55, 0.2);
-}
-
-.session-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.session-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #e8e8e8;
-  margin-bottom: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-preview {
-  font-size: 11px;
-  color: #888;
-  line-height: 1.3;
-  margin-bottom: 4px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.session-time {
-  font-size: 10px;
-  color: #666;
-  font-weight: 500;
-}
-
-.session-actions {
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.session-item:hover .session-actions {
-  opacity: 1;
-}
-
-.delete-btn {
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: rgba(255, 59, 48, 0.1);
-  color: #ff3b30;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  font-weight: 700;
-  transition: all 0.3s ease;
-}
-
-.delete-btn:hover {
-  background: rgba(255, 59, 48, 0.2);
-  transform: scale(1.1);
-}
-
-.sidebar-content {
-  padding: 24px 20px;
-  /* 恢复原始内边距 */
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  /* 恢复原始间距 */
-}
-
-/* 切换按钮样式 */
-.sidebar-toggle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.1), rgba(244, 208, 63, 0.05));
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  user-select: none;
-}
-
-.sidebar-toggle:hover {
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.2), rgba(244, 208, 63, 0.1));
-  border-color: rgba(212, 175, 55, 0.5);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(212, 175, 55, 0.2);
-}
-
-.toggle-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  background: rgba(212, 175, 55, 0.2);
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.toggle-icon .icon {
-  font-size: 16px;
-  color: #d4af37;
-  font-weight: 700;
-  transition: transform 0.3s ease;
-}
-
-.toggle-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.toggle-text h3 {
-  margin: 0 0 2px 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: #e8e8e8;
-}
-
-.toggle-text p {
-  margin: 0;
-  font-size: 11px;
-  color: #888;
-}
-
-/* 收缩状态下的样式调整 */
-.left-sidebar.collapsed .sidebar-content {
-  padding: 24px 8px;
-  align-items: center;
-}
-
-.left-sidebar.collapsed .sidebar-toggle {
-  width: 44px;
-  height: 44px;
-  padding: 6px;
-  justify-content: center;
-}
-
-.left-sidebar.collapsed .toggle-icon {
-  width: 28px;
-  height: 28px;
-}
 
 .sidebar-header {
   display: flex;
