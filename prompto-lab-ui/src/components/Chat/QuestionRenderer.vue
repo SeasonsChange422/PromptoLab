@@ -289,7 +289,8 @@ import LoadingAnimation from './LoadingAnimation.vue'
 import SingleChoiceOptions from './SingleChoiceOptions.vue'
 import MultipleChoiceOptions from './MultipleChoiceOptions.vue'
 import FormField from './FormField.vue'
-import { generatePrompt as apiGeneratePrompt } from '@/services/userInteractionApi'
+import { generatePrompt as apiGeneratePrompt, setUserProfile } from '@/services/userInteractionApi'
+import { toast } from '@/utils/toast'
 
 // 定义问题类型接口
 interface Option {
@@ -341,6 +342,8 @@ type Question = InputQuestion | SingleChoiceQuestion | MultipleChoiceQuestion | 
 interface Props {
   currentQuestion?: Question | null
   isLoading?: boolean
+  sessionId?: string | null
+  userId?: string
 }
 
 const props = defineProps<Props>()
@@ -436,12 +439,43 @@ const toggleQuickInput = (action: string) => {
   }
 }
 
-const submitQuickInput = (action: string) => {
+const submitQuickInput = async (action: string) => {
   const content = quickInputs[action as keyof typeof quickInputs]
   if (!content.trim()) return
   
-  const prefix = action === 'introduce' ? '自我介绍：' : '使用模型：'
-  emit('sendMessage', prefix + content.trim())
+  if (action === 'introduce') {
+    // 介绍自己调用setUserProfile接口
+    try {
+      if (!props.sessionId || !props.userId) {
+        console.error('缺少sessionId或userId，无法设置用户画像')
+        return
+      }
+      
+      await setUserProfile({
+         sessionId: props.sessionId,
+         userId: props.userId,
+         userProfile: content.trim()
+       })
+       
+       console.log('用户画像设置成功')
+       toast.success({
+         title: '设置成功',
+         message: '您的个人信息已保存，AI将为您提供更个性化的服务',
+         duration: 3000
+       })
+     } catch (error) {
+       console.error('设置用户画像失败:', error)
+       toast.error({
+         title: '设置失败',
+         message: '保存个人信息时出现错误，请稍后重试',
+         duration: 3000
+       })
+     }
+  } else {
+    // 其他快捷输入继续使用原有逻辑
+    const prefix = action === 'model' ? '使用模型：' : ''
+    emit('sendMessage', prefix + content.trim())
+  }
   
   quickInputs[action as keyof typeof quickInputs] = ''
   expandedAction.value = null

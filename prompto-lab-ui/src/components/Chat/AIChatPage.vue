@@ -36,7 +36,8 @@
 
     <!-- 中间问答主页面 -->
     <div class="main-content" :style="{ width: mainContentWidth + 'px' }">
-      <QuestionRenderer ref="questionRendererRef" :current-question="currentQuestion" :is-loading="isLoading" @send-message="handleSendMessage"
+      <QuestionRenderer ref="questionRendererRef" :current-question="currentQuestion" :is-loading="isLoading" 
+        :session-id="sessionId" :user-id="userId" @send-message="handleSendMessage"
         @submit-answer="handleSubmitAnswer" @retry-question="handleRetryQuestion" @generate-prompt="handleGeneratePrompt" />
     </div>
 
@@ -122,6 +123,10 @@ const isLoading = ref(false)
 // 问题状态管理
 const currentQuestion = ref<any>(null)
 
+// 会话信息
+const sessionId = ref<string | null>(null)
+const userId = ref<string>('')
+
 // 子组件引用
 const questionRendererRef = ref<any>(null)
 
@@ -195,12 +200,13 @@ const initializeSession = async () => {
     ensureUniqueConnection()
 
     // 生成用户ID（如果没有的话）
-    const userId = 'demo-user-' + Date.now() // 临时用户ID
+    const userIdValue = 'demo-user-' + Date.now() // 临时用户ID
+    userId.value = userIdValue
 
     // 建立SSE连接（不传sessionId，让后端创建新会话）
     eventSource.value = connectUserInteractionSSE(
       null, // sessionId为null，后端会创建新会话
-      userId,
+      userIdValue,
       handleSSEMessage,
       handleSSEError
     )
@@ -254,6 +260,7 @@ const handleConnectionMessage = (response: any): boolean => {
   if (response.type === 'connected' || response.sessionId) {
     // 这是连接建立时的会话信息
     if (response.sessionId) {
+      sessionId.value = response.sessionId
       session.value = {
         sessionId: response.sessionId,
         userId: response.userId || 'demo-user-' + Date.now()

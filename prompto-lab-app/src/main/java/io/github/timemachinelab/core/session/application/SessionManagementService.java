@@ -308,6 +308,17 @@ public class SessionManagementService {
         return stats;
     }
 
+    public Boolean setUserProfile(String sessionId, String userId, String userProfile) {
+        ConversationSession session = validateAndGetSession(userId, sessionId);
+        if (session == null) {
+            log.warn("会话不存在或无效, 用户ID: {} 会话ID: {}", userId, sessionId);
+            return false;
+        }
+
+        session.setUser(userProfile);
+        return true;
+    }
+
     private QaTree createDefaultQaTree() {
 
         QaTree tree = qaTreeDomain.createTree("default");

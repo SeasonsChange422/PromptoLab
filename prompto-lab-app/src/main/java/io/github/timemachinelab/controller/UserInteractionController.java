@@ -8,6 +8,7 @@ import io.github.timemachinelab.core.session.application.SseNotificationService;
 import io.github.timemachinelab.core.session.domain.entity.ConversationSession;
 import io.github.timemachinelab.core.session.infrastructure.ai.GenPromptOperation;
 import io.github.timemachinelab.core.session.infrastructure.web.dto.GenPromptRequest;
+import io.github.timemachinelab.core.session.infrastructure.web.dto.SetUserProfileRequest;
 import io.github.timemachinelab.core.session.infrastructure.web.dto.UnifiedAnswerRequest;
 import io.github.timemachinelab.entity.req.RetryRequest;
 import io.github.timemachinelab.entity.resp.ApiResult;
@@ -307,5 +308,14 @@ public class UserInteractionController {
     @GetMapping("/sse-status")
     public ResponseEntity<Map<String, Object>> getSseStatus() {
         return ResponseEntity.ok(sseNotificationService.getSseStatus());
+    }
+
+    /*
+    * 设置用户画像
+    * */
+
+    @PostMapping("/set-user-profile")
+    public ResponseEntity<Boolean> setUserProfile(@RequestBody SetUserProfileRequest request) {
+        return ResponseEntity.ok(sessionManagementService.setUserProfile(request.getSessionId(), request.getUserId(), request.getUserProfile()));
     }
 }

@@ -2,7 +2,7 @@ package io.github.timemachinelab.core.session.application.impl;
 
 
 import com.alibaba.fastjson2.JSONObject;
-import com.fasterxml.jackson.core.JsonProcessingException;;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import io.github.timemachinelab.core.constant.AllPrompt;
 import io.github.timemachinelab.core.qatree.QaTree;
 import io.github.timemachinelab.core.qatree.QaTreeDomain;
@@ -119,6 +119,7 @@ public class DefaultMessageProcessingService implements MessageProcessingService
         try {
 
             JSONObject object = new JSONObject();
+            object.put("set-user-profile", conversationSession.getUser());
             object.put("prompt",AllPrompt.GLOBAL_PROMPT);
             object.put("tree", QaTreeSerializeUtil.serialize(conversationSession.getQaTree()));
             object.put("input", answerRequest.getAnswerString());
@@ -174,6 +175,7 @@ public class DefaultMessageProcessingService implements MessageProcessingService
             }
             
             JSONObject object = new JSONObject();
+            object.put("set-user-profile", conversationSession.getUser());
             object.put("prompt", AllPrompt.GLOBAL_PROMPT);
             object.put("tree", QaTreeSerializeUtil.serialize(conversationSession.getQaTree()));
             object.put("input", retryInput.toString());

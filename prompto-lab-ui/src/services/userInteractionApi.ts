@@ -202,6 +202,31 @@ export const generatePrompt = async (request: {
 }
 
 /**
+ * 设置用户画像
+ */
+export const setUserProfile = async (request: {
+  sessionId: string
+  userId: string
+  userProfile: string
+}): Promise<boolean> => {
+  try {
+    console.log('发送设置用户画像请求:', request)
+    
+    const response = await apiJsonRequest(`${API_BASE}/set-user-profile`, {
+      method: 'POST',
+      body: JSON.stringify(request)
+    })
+    
+    console.log('设置用户画像响应:', response)
+    return response === true || response.success === true
+    
+  } catch (error) {
+    console.error('设置用户画像请求异常:', error)
+    throw error
+  }
+}
+
+/**
  * 关闭SSE连接
  */
 export const closeUserInteractionSSE = (eventSource: EventSource | null) => {
